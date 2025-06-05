@@ -1,0 +1,16 @@
+EmergentPredictiveCoding/models/patterns_rev/seeded_mnist/
+EmergentPredictiveCoding/models/patterns_rev/mscoco_deepgaze3/
+EmergentPredictiveCoding/models/
+.idea/
+__pycache__/
+datasets/
+venv/
+EmergentPredictiveCoding/Results/
+Paper/
+wandb/
+outputlogs.*
+errorlogs.*
+tmp*/
+*.sh
+Results/
+.DS_Store
