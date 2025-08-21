@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=temporal_stability_RNN
-#SBATCH --partition=klab-gpu
+#SBATCH --partition=klab-l40s
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:H100.80gb:1
+#SBATCH --gres=gpu:L40S:1
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/temporal_stability_%j.out
 #SBATCH --error=logs/temporal_stability_%j.err
@@ -69,7 +69,6 @@ python src/train_temporal_stability.py \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_stability" \
     --log_interval 10 \
     --save_interval 50 \
-   # --use_wandb \
     --seed 42
 
 echo "Job finished at: $(date)"

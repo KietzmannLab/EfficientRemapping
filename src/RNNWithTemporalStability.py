@@ -171,3 +171,11 @@ class RNNWithTemporalStability(State):
         
         self.model.train()
         return total_loss / num_batches if num_batches > 0 else 0
+    
+    def state_dict(self):
+        """Return the state dict of the underlying model"""
+        return self.model.state_dict()
+    
+    def load_state_dict(self, state_dict):
+        """Load state dict into the underlying model"""
+        return self.model.load_state_dict(state_dict)
