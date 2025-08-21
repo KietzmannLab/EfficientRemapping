@@ -259,11 +259,11 @@ class WyssTemporalStabilityLoss(nn.Module):
         # Apply leaky integration
         integrated_output = self.compute_level_output(activity)
         
-        # Update running statistics
-        self.running_stats.update(integrated_output)
+        # Update running statistics (detach to prevent accumulating gradients)
+        self.running_stats.update(integrated_output.detach())
         
-        # Store in history
-        self.activity_history.append(integrated_output.detach())
+        # Store in history (keep gradients for temporal comparison)
+        self.activity_history.append(integrated_output)
         
         # Check if we have enough history for temporal comparison
         if len(self.activity_history) < self.time_delay + 1:
