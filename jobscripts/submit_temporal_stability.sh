@@ -59,16 +59,17 @@ python src/train_temporal_stability.py \
     --input_size 16384 \
     --hidden_size 2048 \
     --temporal_loss_type l2 \
-    --temporal_alpha 0.1 \
+    --temporal_alpha 0.5 \
     --num_epochs 1500 \
     --batch_size 1024 \
     --learning_rate 7e-4 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_stability_l2_alpha01" \
+    --model_name "temporal_stability_l2_alpha05" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_stability" \
     --log_interval 10 \
     --save_interval 50 \
-    --seed 42
+    --seed 42 \
+    --use_wandb \
 
 echo "Job finished at: $(date)"

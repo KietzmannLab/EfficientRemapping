@@ -7,6 +7,7 @@ datasets/
 venv/
 EmergentPredictiveCoding/Results/
 wandb/
+logs/
 outputlogs.*
 errorlogs.*
 tmp*/
