@@ -280,7 +280,7 @@ class WyssTemporalStabilityLoss(nn.Module):
         sparsity_loss = self.sparsity_term()
         
         # Total loss (we minimize -ω_l to maximize ω_l from the paper)
-        total_loss = stability_loss + decorrelation_loss + sparsity_loss
+        total_loss = -stability_loss + decorrelation_loss + sparsity_loss
         
         return total_loss
         
