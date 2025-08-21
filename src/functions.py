@@ -101,9 +101,33 @@ def L2Loss(x:torch.FloatTensor):
 def Linear(x:torch.FloatTensor):
     return x
 
+def temporal_stability_loss(loss_terms):
+    """
+    Temporal stability loss function for the existing loss parsing system.
+    
+    Args:
+        loss_terms: List containing [pre_activations, hidden_states, weights]
+    
+    Returns:
+        loss_fn: Function that computes temporal stability loss
+        loss_arg: Arguments for the loss function
+    """
+    pre, post, weights = loss_terms
+    
+    def loss_fn(states):
+        # Return zero for temporal stability - actual loss computed in RNN wrapper
+        return torch.tensor(0.0, requires_grad=True)
+    
+    return loss_fn, torch.tensor(0.0)
+
+
 def parse_loss(args, terms):
     if args == None:
         return L1Loss, torch.tensor(0.0)
+    
+    # Handle temporal stability loss
+    if 'temporal_stability' in args:
+        return temporal_stability_loss(terms)
     
     pre, post, weights = terms
     arg1, arg2 = args.split('_')
