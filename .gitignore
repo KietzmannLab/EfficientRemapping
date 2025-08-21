@@ -6,11 +6,9 @@ __pycache__/
 datasets/
 venv/
 EmergentPredictiveCoding/Results/
-Paper/
 wandb/
 outputlogs.*
 errorlogs.*
 tmp*/
-*.sh
 Results/
 .DS_Store
