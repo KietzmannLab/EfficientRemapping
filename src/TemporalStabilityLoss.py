@@ -14,12 +14,13 @@ class TemporalStabilityLoss(nn.Module):
     """
     
     def __init__(self, stability_type='l2', alpha=0.1, beta=0.05, 
-                 temporal_window=3, device='cpu'):
+                 temporal_window=3, timestep_distance=1, device='cpu'):
         super(TemporalStabilityLoss, self).__init__()
         self.stability_type = stability_type
         self.alpha = alpha
         self.beta = beta
         self.temporal_window = temporal_window
+        self.timestep_distance = timestep_distance
         self.device = device
         
         # State history for temporal comparison
@@ -48,8 +49,8 @@ class TemporalStabilityLoss(nn.Module):
         if len(self.hidden_states_history) > self.temporal_window:
             self.hidden_states_history.pop(0)
             
-        # Need at least 2 timesteps for temporal comparison
-        if len(self.hidden_states_history) < 2:
+        # Need enough timesteps for temporal comparison with the specified distance
+        if len(self.hidden_states_history) < self.timestep_distance + 1:
             return torch.tensor(0.0, device=self.device, requires_grad=True)
         
         if self.stability_type == 'l2':
@@ -63,12 +64,12 @@ class TemporalStabilityLoss(nn.Module):
     
     def _l2_temporal_loss(self, current_states):
         """L2 temporal consistency loss"""
-        previous_states = self.hidden_states_history[-2]
+        previous_states = self.hidden_states_history[-(self.timestep_distance + 1)]
         return self.alpha * F.mse_loss(current_states, previous_states)
     
     def _cosine_temporal_loss(self, current_states):
         """Cosine similarity temporal consistency loss"""
-        previous_states = self.hidden_states_history[-2]
+        previous_states = self.hidden_states_history[-(self.timestep_distance + 1)]
         cosine_sim = F.cosine_similarity(current_states, previous_states, dim=1)
         return self.alpha * (1 - cosine_sim).mean()
     
@@ -77,7 +78,7 @@ class TemporalStabilityLoss(nn.Module):
         total_loss = 0.0
         
         # Basic temporal stability
-        previous_states = self.hidden_states_history[-2]
+        previous_states = self.hidden_states_history[-(self.timestep_distance + 1)]
         total_loss += self.alpha * F.mse_loss(current_states, previous_states)
         
         # Multi-step consistency (if enough history)

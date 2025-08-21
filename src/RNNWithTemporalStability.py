@@ -16,8 +16,8 @@ class RNNWithTemporalStability(State):
     
     def __init__(self, activation_func, optimizer, lr, input_size, hidden_size, 
                  title, device, temporal_loss_type='l2', temporal_alpha=0.1,
-                 use_fixation=True, use_conv=False, use_lstm=False, 
-                 warp_imgs=False, use_resNet=False, time_steps_img=6, 
+                 temporal_timestep_distance=1, use_fixation=True, use_conv=False, 
+                 use_lstm=False, warp_imgs=False, use_resNet=False, time_steps_img=6, 
                  time_steps_cords=3, mnist=False, twolayer=False, dropout=0,
                  deterministic=True, weights_init=None, prevbatch=False,
                  conv=False, seed=None, disentangled_loss=False, 
@@ -59,6 +59,7 @@ class RNNWithTemporalStability(State):
         self.temporal_loss_fn = TemporalStabilityLoss(
             stability_type=temporal_loss_type,
             alpha=temporal_alpha,
+            timestep_distance=temporal_timestep_distance,
             device=device
         )
         

@@ -49,6 +49,7 @@ def train_temporal_stability_model(config):
         device=device,
         temporal_loss_type=config['temporal_loss_type'],
         temporal_alpha=config['temporal_alpha'],
+        temporal_timestep_distance=config['temporal_timestep_distance'],
         use_fixation=True,
         use_conv=False,
         use_lstm=False,
@@ -191,6 +192,8 @@ def main():
                         help='Type of temporal stability loss')
     parser.add_argument('--temporal_alpha', type=float, default=0.1,
                         help='Temporal stability loss weight')
+    parser.add_argument('--temporal_timestep_distance', type=int, default=1,
+                        help='Timestep distance for temporal stability comparison')
     parser.add_argument('--time_steps_img', type=int, default=6,
                         help='Time steps for image processing')
     parser.add_argument('--time_steps_cords', type=int, default=3,
