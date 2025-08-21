@@ -53,21 +53,18 @@ nvidia-smi
 # Create directory structure for models if it doesn't exist
 mkdir -p /share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_stability
 
-# Run the training script
+# Run the training script with Wyss temporal stability loss
 python src/train_temporal_stability.py \
     --dataset_path /share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5 \
     --input_size 16384 \
     --hidden_size 2048 \
-    --temporal_loss_type l2 \
-    --temporal_alpha 0.5 \
-    --temporal_timestep_distance 1 \
-    --temporal_window 3 \
+    --level_idx 0 \
     --num_epochs 1500 \
     --batch_size 1024 \
-    --learning_rate 7e-4 \
+    --learning_rate 1e-4 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_stability_l2_alpha05" \
+    --model_name "wyss_temporal_stability_level0" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_stability" \
     --log_interval 10 \
     --save_interval 50 \
