@@ -61,6 +61,7 @@ python src/train_temporal_stability.py \
     --temporal_loss_type l2 \
     --temporal_alpha 0.5 \
     --temporal_timestep_distance 1 \
+    --temporal_window 3 \
     --num_epochs 1500 \
     --batch_size 1024 \
     --learning_rate 7e-4 \

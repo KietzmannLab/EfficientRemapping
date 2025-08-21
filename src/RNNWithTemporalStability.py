@@ -6,7 +6,7 @@ Maintains the same interface as the original RNN.State class.
 import torch
 import torch.nn.functional as F
 from RNN import State
-from TemporalStabilityLoss import TemporalStabilityLoss
+from WyssTemporalStabilityLoss import WyssTemporalStabilityLoss
 
 class RNNWithTemporalStability(State):
     """
@@ -15,8 +15,7 @@ class RNNWithTemporalStability(State):
     """
     
     def __init__(self, activation_func, optimizer, lr, input_size, hidden_size, 
-                 title, device, temporal_loss_type='l2', temporal_alpha=0.1,
-                 temporal_timestep_distance=1, use_fixation=True, use_conv=False, 
+                 title, device, level_idx=0, use_fixation=True, use_conv=False, 
                  use_lstm=False, warp_imgs=False, use_resNet=False, time_steps_img=6, 
                  time_steps_cords=3, mnist=False, twolayer=False, dropout=0,
                  deterministic=True, weights_init=None, prevbatch=False,
@@ -55,11 +54,10 @@ class RNNWithTemporalStability(State):
             useReservoir=useReservoir
         )
         
-        # Initialize temporal stability loss
-        self.temporal_loss_fn = TemporalStabilityLoss(
-            stability_type=temporal_loss_type,
-            alpha=temporal_alpha,
-            timestep_distance=temporal_timestep_distance,
+        # Initialize Wyss temporal stability loss
+        self.temporal_loss_fn = WyssTemporalStabilityLoss(
+            level_idx=level_idx,
+            num_units=hidden_size,
             device=device
         )
         
@@ -141,7 +139,7 @@ class RNNWithTemporalStability(State):
                         state=h, recurrent_state=recurrent_state
                     )
                 
-                # Compute temporal stability loss on hidden states
+                # Compute Wyss temporal stability loss on hidden states
                 # Use the last layer's hidden state for temporal consistency
                 if isinstance(recurrent_state, list) and len(recurrent_state) > 0:
                     if isinstance(recurrent_state[0], list) and len(recurrent_state[0]) > 0:
@@ -149,11 +147,11 @@ class RNNWithTemporalStability(State):
                         last_hidden = recurrent_state[0][-1]
                         if isinstance(last_hidden, tuple):
                             last_hidden = last_hidden[0]  # For LSTM
-                        temporal_loss = self.temporal_loss_fn(last_hidden, fixations[:, i])
+                        temporal_loss = self.temporal_loss_fn(last_hidden)
                         total_loss = total_loss + temporal_loss
                 elif h is not None:
                     # Fallback to using h if recurrent_state is not available
-                    temporal_loss = self.temporal_loss_fn(h, fixations[:, i])
+                    temporal_loss = self.temporal_loss_fn(h)
                     total_loss = total_loss + temporal_loss
         
         return total_loss, total_loss.detach(), None

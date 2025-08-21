@@ -38,7 +38,7 @@ def train_temporal_stability_model(config):
     train_set = H5dataset('train', config['dataset_path'], device=device, use_color=False)
     validation_set = H5dataset('val', config['dataset_path'], device=device, use_color=False)
     
-    # Initialize model with temporal stability loss
+    # Initialize model with Wyss temporal stability loss
     model = RNNWithTemporalStability(
         activation_func=torch.nn.ReLU(),
         optimizer=torch.optim.Adam,
@@ -47,9 +47,7 @@ def train_temporal_stability_model(config):
         hidden_size=config['hidden_size'],
         title=config['model_name'],
         device=device,
-        temporal_loss_type=config['temporal_loss_type'],
-        temporal_alpha=config['temporal_alpha'],
-        temporal_timestep_distance=config['temporal_timestep_distance'],
+        level_idx=config.get('level_idx', 0),
         use_fixation=True,
         use_conv=False,
         use_lstm=False,
@@ -187,13 +185,8 @@ def main():
                         help='Input size (default: 128*128)')
     parser.add_argument('--hidden_size', type=int, default=2048,
                         help='Hidden size (default: 2048)')
-    parser.add_argument('--temporal_loss_type', type=str, default='l2',
-                        choices=['l2', 'cosine', 'combined'],
-                        help='Type of temporal stability loss')
-    parser.add_argument('--temporal_alpha', type=float, default=0.1,
-                        help='Temporal stability loss weight')
-    parser.add_argument('--temporal_timestep_distance', type=int, default=1,
-                        help='Timestep distance for temporal stability comparison')
+    parser.add_argument('--level_idx', type=int, default=0,
+                        help='Hierarchy level index for Wyss temporal stability loss')
     parser.add_argument('--time_steps_img', type=int, default=6,
                         help='Time steps for image processing')
     parser.add_argument('--time_steps_cords', type=int, default=3,
@@ -237,8 +230,7 @@ def main():
     
     # Add additional config parameters
     config.update({
-        'temporal_loss_type': args.temporal_loss_type,
-        'temporal_alpha': args.temporal_alpha
+        'level_idx': args.level_idx
     })
     
     print("Training configuration:")
