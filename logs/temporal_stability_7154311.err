@@ -1,0 +1,17 @@
+/home/student/p/psulewski/.conda/envs/efficient/lib/python3.7/site-packages/torch/cuda/__init__.py:155: UserWarning: 
+NVIDIA H100 80GB HBM3 with CUDA capability sm_90 is not compatible with the current PyTorch installation.
+The current PyTorch install supports CUDA capabilities sm_37 sm_50 sm_60 sm_70 sm_75 sm_80 sm_86.
+If you want to use the NVIDIA H100 80GB HBM3 GPU with PyTorch, please check the instructions at https://pytorch.org/get-started/locally/
+
+  warnings.warn(incompatible_device_warn.format(device_name, capability, " ".join(arch_list), device_name))
+/home/student/p/psulewski/.conda/envs/efficient/lib/python3.7/site-packages/torch/utils/data/datapipes/utils/common.py:136: UserWarning: Local function is not supported by pickle, please use regular python function or functools.partial instead.
+  "Local function is not supported by pickle, please use "
+Traceback (most recent call last):
+  File "src/train_temporal_stability.py", line 250, in <module>
+    main()
+  File "src/train_temporal_stability.py", line 246, in main
+    train_temporal_stability_model(config)
+  File "src/train_temporal_stability.py", line 160, in train_temporal_stability_model
+    torch.save(model.state_dict(), save_path)
+AttributeError: 'RNNWithTemporalStability' object has no attribute 'state_dict'
+/var/spool/slurm/d/job7154311/slurm_script: line 73: --seed: command not found

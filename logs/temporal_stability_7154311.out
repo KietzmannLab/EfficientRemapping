@@ -1,0 +1,89 @@
+running in shell:  /bin/bash
+
+     active environment : efficient
+    active env location : /home/student/p/psulewski/.conda/envs/efficient
+            shell level : 2
+       user config file : /home/student/p/psulewski/.condarc
+ populated config files : /home/student/p/psulewski/.condarc
+          conda version : 4.10.3
+    conda-build version : not installed
+         python version : 3.9.5.final.0
+       virtual packages : __cuda=12.2=0
+                          __linux=4.18.0=0
+                          __glibc=2.28=0
+                          __unix=0=0
+                          __archspec=1=x86_64
+       base environment : /appl/spack/opt/spack/linux-rocky8-zen/gcc-8.5.0/miniconda3-4.10.3-bgxkfvih5n7x4hyikk6stosxeo5hajxx  (read only)
+      conda av data dir : /appl/spack/opt/spack/linux-rocky8-zen/gcc-8.5.0/miniconda3-4.10.3-bgxkfvih5n7x4hyikk6stosxeo5hajxx/etc/conda
+  conda av metadata url : None
+           channel URLs : https://repo.anaconda.com/pkgs/main/linux-64
+                          https://repo.anaconda.com/pkgs/main/noarch
+                          https://repo.anaconda.com/pkgs/r/linux-64
+                          https://repo.anaconda.com/pkgs/r/noarch
+          package cache : /appl/spack/opt/spack/linux-rocky8-zen/gcc-8.5.0/miniconda3-4.10.3-bgxkfvih5n7x4hyikk6stosxeo5hajxx/pkgs
+                          /home/student/p/psulewski/.conda/pkgs
+                          /share/klab/psulewski/envs/pkgs
+       envs directories : /home/student/p/psulewski/.conda/envs
+                          /appl/spack/opt/spack/linux-rocky8-zen/gcc-8.5.0/miniconda3-4.10.3-bgxkfvih5n7x4hyikk6stosxeo5hajxx/envs
+               platform : linux-64
+             user-agent : conda/4.10.3 requests/2.25.1 CPython/3.9.5 Linux/4.18.0-425.19.2.el8_7.x86_64 rocky/8.7 glibc/2.28
+                UID:GID : 68581:302
+             netrc file : /home/student/p/psulewski/.netrc
+           offline mode : False
+
+Job started at: Thu Aug 21 14:43:03 CEST 2025
+Running on node: klab-1
+CUDA devices available:
+Thu Aug 21 14:43:03 2025       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 535.161.08             Driver Version: 535.161.08   CUDA Version: 12.2     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  NVIDIA H100 80GB HBM3          On  | 00000000:3B:00.0 Off |                    0 |
+| N/A   29C    P0              72W / 700W |      0MiB / 81559MiB |      0%      Default |
+|                                         |                      |             Disabled |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+Training configuration:
+  dataset_path: /share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5
+  input_size: 16384
+  hidden_size: 2048
+  temporal_loss_type: l2
+  temporal_alpha: 0.1
+  time_steps_img: 6
+  time_steps_cords: 3
+  dropout: 0.0
+  num_epochs: 1500
+  batch_size: 1024
+  learning_rate: 0.0007
+  scheduler_step: 50
+  scheduler_gamma: 0.75
+  model_name: temporal_stability_l2_alpha01
+  save_dir: /share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_stability
+  log_interval: 10
+  save_interval: 50
+  use_wandb: False
+  seed: 42
+Using cuda
+Training on device: cuda
+Loading dataset: /share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5
+Starting training for 1500 epochs...
+Epoch 1/1500, Batch 0, Train Loss: 0.000000
+Epoch 1/1500, Batch 10, Train Loss: 0.000000
+Epoch 1/1500, Batch 20, Train Loss: 0.000000
+Epoch 1/1500, Batch 30, Train Loss: 0.000000
+Epoch 1/1500, Batch 40, Train Loss: 0.000000
+Epoch 1/1500 completed in 229.66s
+Train Loss: 0.000000, Val Loss: 0.000000
+Learning Rate: 7.00e-04
+Job finished at: Thu Aug 21 14:47:01 CEST 2025
