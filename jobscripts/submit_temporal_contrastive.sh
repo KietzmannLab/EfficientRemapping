@@ -66,7 +66,7 @@ python src/train_temporal_contrastive.py \
     --learning_rate 1e-4 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_contrastive_fixed_t05_nb2_middle_neg8" \
+    --model_name "temporal_contrastive_within_batch_t05_nb2_middle" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive" \
     --log_interval 10 \
     --save_interval 50 \
