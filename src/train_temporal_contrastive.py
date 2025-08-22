@@ -23,7 +23,7 @@ class RNNWithTemporalContrastive(State):
     
     def __init__(self, activation_func, optimizer, lr, input_size, hidden_size, 
                  title, device, temperature=0.07, n_back=3, projection_dim=128,
-                 negative_samples=8, **kwargs):
+                 negative_samples=8, contrastive_layer='last', **kwargs):
         """Initialize RNN with temporal contrastive learning."""
         
         # Initialize base RNN
@@ -47,6 +47,10 @@ class RNNWithTemporalContrastive(State):
             device=device,
             negative_samples=negative_samples
         )
+        
+        # Store layer selection parameter
+        self.contrastive_layer = contrastive_layer
+        print(f"Contrastive loss will be applied to: {contrastive_layer} layer")
         
     def run(self, batch, fixations, loss_fn='temporal_contrastive', state=None):
         """Run batch through model with temporal contrastive loss."""
@@ -113,22 +117,66 @@ class RNNWithTemporalContrastive(State):
                         state=h, recurrent_state=recurrent_state
                     )
                 
-                # Compute temporal contrastive loss on hidden states
-                # Use the last layer's hidden state for contrastive learning
-                if isinstance(recurrent_state, list) and len(recurrent_state) > 0:
-                    if isinstance(recurrent_state[0], list) and len(recurrent_state[0]) > 0:
-                        # Get the last layer's hidden state
-                        last_hidden = recurrent_state[0][-1]
-                        if isinstance(last_hidden, tuple):
-                            last_hidden = last_hidden[0]  # For LSTM
-                        contrastive_loss = self.contrastive_loss_fn(last_hidden)
-                        total_loss = total_loss + contrastive_loss
-                elif h is not None:
-                    # Fallback to using h if recurrent_state is not available
-                    contrastive_loss = self.contrastive_loss_fn(h)
+                # Compute temporal contrastive loss on selected layer
+                selected_hidden = self._get_selected_layer_hidden(h, recurrent_state)
+                if selected_hidden is not None:
+                    contrastive_loss = self.contrastive_loss_fn(selected_hidden)
                     total_loss = total_loss + contrastive_loss
         
         return total_loss, total_loss.detach(), None
+    
+    def _get_selected_layer_hidden(self, h, recurrent_state):
+        """
+        Get hidden states from the selected layer for contrastive learning.
+        
+        Args:
+            h: Top-level hidden state
+            recurrent_state: Hierarchical recurrent states
+            
+        Returns:
+            selected_hidden: Hidden states from selected layer, or None if not available
+        """
+        if isinstance(recurrent_state, list) and len(recurrent_state) > 0:
+            if isinstance(recurrent_state[0], list) and len(recurrent_state[0]) > 0:
+                layers = recurrent_state[0]
+                
+                if self.contrastive_layer == 'first':
+                    # First layer (lowest level - edges, textures)
+                    selected_hidden = layers[0]
+                elif self.contrastive_layer == 'middle':
+                    # Middle layer (mid-level features)
+                    middle_idx = len(layers) // 2
+                    selected_hidden = layers[middle_idx]
+                elif self.contrastive_layer == 'last':
+                    # Last layer (highest level - scene features)
+                    selected_hidden = layers[-1]
+                elif self.contrastive_layer.startswith('layer_'):
+                    # Specific layer index (e.g., 'layer_1', 'layer_2')
+                    try:
+                        layer_idx = int(self.contrastive_layer.split('_')[1])
+                        if 0 <= layer_idx < len(layers):
+                            selected_hidden = layers[layer_idx]
+                        else:
+                            print(f"Warning: layer_{layer_idx} not available, using last layer")
+                            selected_hidden = layers[-1]
+                    except (ValueError, IndexError):
+                        print(f"Warning: invalid layer specification '{self.contrastive_layer}', using last layer")
+                        selected_hidden = layers[-1]
+                else:
+                    print(f"Warning: unknown layer '{self.contrastive_layer}', using last layer")
+                    selected_hidden = layers[-1]
+                
+                # Handle LSTM tuple (hidden, cell) -> take hidden
+                if isinstance(selected_hidden, tuple):
+                    selected_hidden = selected_hidden[0]
+                    
+                return selected_hidden
+                
+        # Fallback to top-level hidden state
+        elif h is not None:
+            return h
+            
+        return None
 
 def train_temporal_contrastive_model(config):
     """
@@ -166,6 +214,7 @@ def train_temporal_contrastive_model(config):
         n_back=config['n_back'],
         projection_dim=config['projection_dim'],
         negative_samples=config['negative_samples'],
+        contrastive_layer=config['contrastive_layer'],
         use_fixation=True,
         use_conv=False,
         use_lstm=False,
@@ -332,15 +381,18 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.0,
                         help='Dropout rate')
     
-    # Contrastive learning parameters
-    parser.add_argument('--temperature', type=float, default=0.07,
-                        help='Temperature parameter for contrastive loss')
+    # Contrastive learning parameters (FIXED defaults)
+    parser.add_argument('--temperature', type=float, default=0.5,
+                        help='Temperature parameter for contrastive loss (increased for stability)')
     parser.add_argument('--n_back', type=int, default=3,
                         help='Number of timesteps back for positive pairs')
     parser.add_argument('--projection_dim', type=int, default=128,
                         help='Dimension of projection head output')
-    parser.add_argument('--negative_samples', type=int, default=8,
-                        help='Number of negative samples per positive pair')
+    parser.add_argument('--negative_samples', type=int, default=16,
+                        help='Number of negative samples per positive pair (increased for better learning)')
+    parser.add_argument('--contrastive_layer', type=str, default='last',
+                        choices=['first', 'middle', 'last', 'layer_0', 'layer_1', 'layer_2', 'layer_3'],
+                        help='Which layer to apply contrastive loss to (first=low-level, last=high-level)')
     
     # Training parameters
     parser.add_argument('--num_epochs', type=int, default=1500,

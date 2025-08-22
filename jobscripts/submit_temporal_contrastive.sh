@@ -51,21 +51,22 @@ nvidia-smi
 # Create directory structure for models if it doesn't exist
 mkdir -p /share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive
 
-# Run the training script with temporal contrastive learning
+# Run the training script with temporal contrastive learning (FIXED VERSION)
 python src/train_temporal_contrastive.py \
     --dataset_path /share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5 \
     --input_size 16384 \
     --hidden_size 2048 \
-    --temperature 0.07 \
+    --temperature 0.5 \
     --n_back 3 \
     --projection_dim 128 \
-    --negative_samples 8 \
+    --negative_samples 16 \
+    --contrastive_layer last \
     --num_epochs 1500 \
     --batch_size 1024 \
     --learning_rate 1e-4 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_contrastive_t07_nb3" \
+    --model_name "temporal_contrastive_fixed_t05_nb3_last" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive" \
     --log_interval 10 \
     --save_interval 50 \

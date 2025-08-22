@@ -319,36 +319,17 @@ class BatchTemporalContrastiveLoss(nn.Module):
                 anchor = current_features[b]
                 positive = positive_features[b]
                 
-                # Collect negatives from different sources
+                # FIXED: Only collect negatives from DIFFERENT SCENES (not current batch)
                 negatives = []
                 
-                # 1. Other sequences in current batch (different scenes)
-                for other_b in range(batch_size):
-                    if other_b != b:
-                        negatives.append(current_features[other_b])
-                
-                # 2. Other sequences from positive timestep
-                for other_b in range(len(positive_features)):
-                    if other_b != b:
-                        negatives.append(positive_features[other_b])
-                
-                # 3. Random features from global negative buffer
-                if len(self.global_negative_buffer) > 0:
-                    n_global_negs = min(self.negative_samples // 2, len(self.global_negative_buffer))
-                    global_negs = random.sample(list(self.global_negative_buffer), n_global_negs)
+                # Only use global negative buffer from previous batches/scenes
+                # This ensures ALL negatives are from different scenes
+                if len(self.global_negative_buffer) >= self.min_negatives:
+                    # Sample all negatives from global buffer (guaranteed different scenes)
+                    n_available = len(self.global_negative_buffer)
+                    n_to_sample = min(self.negative_samples, n_available)
+                    global_negs = random.sample(list(self.global_negative_buffer), n_to_sample)
                     negatives.extend(global_negs)
-                
-                # 4. Random features from other timesteps in current batch
-                for t in range(len(self.current_batch_history)):
-                    if t != self.current_timestep and t != positive_timestep:
-                        timestep_features = self.current_batch_history[t]
-                        if len(timestep_features) > 0:
-                            random_feat = random.choice(timestep_features)
-                            negatives.append(random_feat)
-                
-                # Sample negatives if we have too many
-                if len(negatives) > self.negative_samples:
-                    negatives = random.sample(negatives, self.negative_samples)
                 
                 # Only compute loss if we have enough negatives
                 if len(negatives) >= self.min_negatives:
