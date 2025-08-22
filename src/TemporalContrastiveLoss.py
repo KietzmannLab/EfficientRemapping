@@ -132,7 +132,7 @@ class TemporalContrastiveLoss(nn.Module):
         
     def compute_contrastive_loss(self, anchor, positive, negatives):
         """
-        Compute InfoNCE contrastive loss using proper F.cross_entropy.
+        Compute BALANCED InfoNCE contrastive loss with equal positive/negative weighting.
         
         Args:
             anchor: [projection_dim] anchor features
@@ -146,14 +146,16 @@ class TemporalContrastiveLoss(nn.Module):
         pos_similarity = torch.dot(anchor, positive) / self.temperature
         neg_similarities = torch.mv(negatives, anchor) / self.temperature
         
-        # Stack positive and negative similarities
-        # Positive should be first (label = 0)
-        logits = torch.cat([pos_similarity.unsqueeze(0), neg_similarities])
+        # BALANCED InfoNCE: Average negatives to give equal weight to pos/neg
+        avg_neg_similarity = neg_similarities.mean()
+        
+        # Create balanced logits: [positive, average_negative]
+        logits = torch.cat([pos_similarity.unsqueeze(0), avg_neg_similarity.unsqueeze(0)])
         
         # Create label for positive (index 0)
         labels = torch.zeros(1, dtype=torch.long, device=self.device)
         
-        # Compute cross-entropy loss (proper InfoNCE)
+        # Compute balanced cross-entropy loss
         loss = F.cross_entropy(logits.unsqueeze(0), labels)
         
         return loss
@@ -276,9 +278,16 @@ class BatchTemporalContrastiveLoss(nn.Module):
         """
         print(f"Initializing negative buffer with {num_random} random features for faster learning...")
         for _ in range(num_random):
-            # Create random normalized features
-            random_feat = torch.randn(self.projection_dim, device=self.device)
+            # Create random normalized features with proper scaling
+            random_feat = torch.randn(self.projection_dim, device=self.device) * 0.1  # Smaller scale
             random_feat = F.normalize(random_feat, dim=0)
+            
+            # Ensure no NaN or inf values
+            if torch.isnan(random_feat).any() or torch.isinf(random_feat).any():
+                print("Warning: NaN/Inf detected in random initialization, using zeros")
+                random_feat = torch.zeros(self.projection_dim, device=self.device)
+                random_feat[0] = 1.0  # Unit vector
+                
             self.global_negative_buffer.append(random_feat)
         print(f"Negative buffer initialized with {len(self.global_negative_buffer)} features")
         
@@ -348,12 +357,15 @@ class BatchTemporalContrastiveLoss(nn.Module):
                 if len(negatives) >= self.min_negatives:
                     negatives_tensor = torch.stack(negatives)
                     
-                    # Proper InfoNCE loss computation using F.cross_entropy
+                    # BALANCED InfoNCE loss computation using F.cross_entropy
                     pos_sim = torch.dot(anchor, positive) / self.temperature
                     neg_sims = torch.mv(negatives_tensor, anchor) / self.temperature
                     
-                    # Positive similarity should be first (label = 0)
-                    logits = torch.cat([pos_sim.unsqueeze(0), neg_sims])
+                    # BALANCED InfoNCE: Average negatives for equal pos/neg weighting
+                    avg_neg_sim = neg_sims.mean()
+                    
+                    # Create balanced logits: [positive, average_negative]
+                    logits = torch.cat([pos_sim.unsqueeze(0), avg_neg_sim.unsqueeze(0)])
                     labels = torch.zeros(1, dtype=torch.long, device=self.device)
                     
                     loss = F.cross_entropy(logits.unsqueeze(0), labels)

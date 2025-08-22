@@ -53,14 +53,14 @@ python src/train_temporal_contrastive.py \
     --temperature 0.3 \
     --n_back 3 \
     --projection_dim 128 \
-    --negative_samples 16 \
+    --negative_samples 8 \
     --contrastive_layer last \
     --num_epochs 500 \
     --batch_size 256 \
-    --learning_rate 5e-4 \
+    --learning_rate 1e-7 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_contrastive_fast_lr5e4_bs256" \
+    --model_name "temporal_contrastive_fast_lr1e7_bs256" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive" \
     --log_interval 10 \
     --save_interval 50 \

@@ -259,8 +259,9 @@ def train_temporal_contrastive_model(config):
         print("Using mixed precision training (FP16) for faster convergence")
     
     # Initialize negative buffer for immediate learning (avoids cold start)
-    if config.get('fast_start', True):
-        model.contrastive_loss_fn.initialize_negative_buffer_with_random(num_random=200)
+    # DISABLED: Random init causes NaN issues, let buffer fill naturally
+    # if config.get('fast_start', True):
+    #     model.contrastive_loss_fn.initialize_negative_buffer_with_random(num_random=200)
     
     timer = Timer()
     best_val_loss = float('inf')
