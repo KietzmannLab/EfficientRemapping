@@ -254,7 +254,7 @@ def train_temporal_contrastive_model(config):
         print(f"Using step LR schedule (step: {config['scheduler_step']}, gamma: {config['scheduler_gamma']})")
     
     # Mixed precision training for speed
-    scaler = torch.cuda.amp.GradScaler() if config.get('use_mixed_precision', False) and device.type == 'cuda' else None
+    scaler = torch.cuda.amp.GradScaler() if config.get('use_mixed_precision', False) and 'cuda' in str(device) else None
     if scaler:
         print("Using mixed precision training (FP16) for faster convergence")
     
