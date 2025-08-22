@@ -235,12 +235,32 @@ def train_temporal_contrastive_model(config):
             name=config['model_name']
         )
     
-    # Training parameters
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        model.optimizer, 
-        step_size=config['scheduler_step'], 
-        gamma=config['scheduler_gamma']
-    )
+    # Advanced learning rate scheduling for faster convergence
+    if config.get('use_cosine_schedule', False):
+        # Cosine annealing with warmup for contrastive learning
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            model.optimizer,
+            T_max=config['num_epochs'],
+            eta_min=config['learning_rate'] * 0.01
+        )
+        print(f"Using cosine annealing LR schedule (min_lr: {config['learning_rate'] * 0.01:.2e})")
+    else:
+        # Original step scheduler
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            model.optimizer, 
+            step_size=config['scheduler_step'], 
+            gamma=config['scheduler_gamma']
+        )
+        print(f"Using step LR schedule (step: {config['scheduler_step']}, gamma: {config['scheduler_gamma']})")
+    
+    # Mixed precision training for speed
+    scaler = torch.cuda.amp.GradScaler() if config.get('use_mixed_precision', False) and device.type == 'cuda' else None
+    if scaler:
+        print("Using mixed precision training (FP16) for faster convergence")
+    
+    # Initialize negative buffer for immediate learning (avoids cold start)
+    if config.get('fast_start', True):
+        model.contrastive_loss_fn.initialize_negative_buffer_with_random(num_random=200)
     
     timer = Timer()
     best_val_loss = float('inf')
@@ -265,11 +285,18 @@ def train_temporal_contrastive_model(config):
             # Zero gradients
             model.zero_grad()
             
-            # Forward pass with temporal contrastive loss
-            loss, _, _ = model.run(batch, fixations, loss_fn='temporal_contrastive')
-            
-            # Backward pass
-            model.step(loss)
+            # Mixed precision forward pass
+            if scaler:
+                with torch.cuda.amp.autocast():
+                    loss, _, _ = model.run(batch, fixations, loss_fn='temporal_contrastive')
+                # Mixed precision backward pass
+                scaler.scale(loss).backward()
+                scaler.step(model.optimizer)
+                scaler.update()
+            else:
+                # Standard precision
+                loss, _, _ = model.run(batch, fixations, loss_fn='temporal_contrastive')
+                model.step(loss)
             
             train_loss += loss.item()
             num_train_batches += 1
@@ -398,13 +425,19 @@ def main():
     parser.add_argument('--num_epochs', type=int, default=1500,
                         help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=1024,
-                        help='Batch size')
+                        help='Batch size (smaller is better for contrastive learning)')
     parser.add_argument('--learning_rate', type=float, default=1e-4,
-                        help='Learning rate')
+                        help='Learning rate (can be higher for contrastive learning)')
     parser.add_argument('--scheduler_step', type=int, default=50,
                         help='Learning rate scheduler step size')
     parser.add_argument('--scheduler_gamma', type=float, default=0.75,
                         help='Learning rate scheduler gamma')
+    
+    # Speed optimization parameters
+    parser.add_argument('--use_cosine_schedule', action='store_true',
+                        help='Use cosine annealing LR schedule (better for contrastive learning)')
+    parser.add_argument('--use_mixed_precision', action='store_true',
+                        help='Use FP16 mixed precision training for faster convergence')
     
     # Logging and saving
     parser.add_argument('--model_name', type=str, 

@@ -269,6 +269,19 @@ class BatchTemporalContrastiveLoss(nn.Module):
         print(f"  N-back: {n_back}, Projection dim: {projection_dim}")
         print(f"  Negative samples: {negative_samples} (min: {self.min_negatives})")
         
+    def initialize_negative_buffer_with_random(self, num_random=100):
+        """
+        Initialize negative buffer with random features to avoid cold start.
+        This enables learning from the very first batch.
+        """
+        print(f"Initializing negative buffer with {num_random} random features for faster learning...")
+        for _ in range(num_random):
+            # Create random normalized features
+            random_feat = torch.randn(self.projection_dim, device=self.device)
+            random_feat = F.normalize(random_feat, dim=0)
+            self.global_negative_buffer.append(random_feat)
+        print(f"Negative buffer initialized with {len(self.global_negative_buffer)} features")
+        
     def reset_sequence(self):
         """Reset for new batch - called at start of each batch processing."""
         # Store some features from current batch as future negatives
