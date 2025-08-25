@@ -53,32 +53,48 @@ def evaluate_energy_efficiency(net, validation_set, confidence=0.99):
     )
     
     # Convert to numpy arrays for analysis
-    model_losses = np.array(losses).flatten()
-    random_losses = np.array(losses_random_fix).flatten()
+    model_losses = np.array(losses)  # Shape: (batch_size, fixations=7, timesteps=6)
+    random_losses = np.array(losses_random_fix)  # Shape: (batch_size, fixations=7, timesteps=6)
     
-    # Calculate statistics with confidence intervals
-    mean_loss = np.mean(model_losses)
-    mean_random_loss = np.mean(random_losses)
-    std_loss = np.std(model_losses)
-    std_random_loss = np.std(random_losses)
-    sem_loss = scipy.stats.sem(model_losses)
-    sem_random_loss = scipy.stats.sem(random_losses)
+    print(f"Original loss shapes - Model: {model_losses.shape}, Random: {random_losses.shape}")
+    
+    # Following plotResults.py methodology: only use rnn_iter == 0 (first timestep)
+    # This matches plotResults.py line 137-138
+    model_losses_t0 = model_losses[:, :, 0]  # Only timestep 0
+    random_losses_t0 = random_losses[:, :, 0]  # Only timestep 0
+    
+    print(f"Timestep 0 shapes - Model: {model_losses_t0.shape}, Random: {random_losses_t0.shape}")
+    
+    # Flatten for statistical analysis (matching paper methodology)
+    model_losses_flat = model_losses_t0.flatten()
+    random_losses_flat = random_losses_t0.flatten()
+    
+    print(f"Final flattened shapes - Model: {model_losses_flat.shape}, Random: {random_losses_flat.shape}")
+    print(f"Using only timestep 0 (rnn_iter=0) as in plotResults.py")
+    
+    # Calculate statistics with confidence intervals (using timestep 0 only)
+    mean_loss = np.mean(model_losses_flat)
+    mean_random_loss = np.mean(random_losses_flat)
+    std_loss = np.std(model_losses_flat)
+    std_random_loss = np.std(random_losses_flat)
+    sem_loss = scipy.stats.sem(model_losses_flat)
+    sem_random_loss = scipy.stats.sem(random_losses_flat)
     
     # 99% Confidence intervals using t-distribution (more robust)
     alpha = 1 - confidence
-    dof = len(model_losses) - 1
+    dof = len(model_losses_flat) - 1
     t_critical = scipy.stats.t.ppf(1 - alpha/2, dof)
     
     ci_lower = mean_loss - t_critical * sem_loss
     ci_upper = mean_loss + t_critical * sem_loss
     
-    dof_random = len(random_losses) - 1
+    dof_random = len(random_losses_flat) - 1
     t_critical_random = scipy.stats.t.ppf(1 - alpha/2, dof_random)
     ci_lower_random = mean_random_loss - t_critical_random * sem_random_loss
     ci_upper_random = mean_random_loss + t_critical_random * sem_random_loss
     
-    # Statistical significance test (same as paper)
-    t_stat, p_value = scipy.stats.ttest_ind(model_losses, random_losses, alternative='less')
+    # Statistical significance test (same as paper, using timestep 0 only)
+    t_stat, p_value = scipy.stats.ttest_ind(model_losses_flat, random_losses_flat, alternative='less')
     
     results = {
         'model_loss_mean': mean_loss,
@@ -94,9 +110,11 @@ def evaluate_energy_efficiency(net, validation_set, confidence=0.99):
         't_statistic': t_stat,
         'p_value': p_value,
         'confidence': confidence,
-        'n_samples': len(model_losses),
-        'raw_model_losses': model_losses,
-        'raw_random_losses': random_losses
+        'n_samples': len(model_losses_flat),
+        'raw_model_losses': model_losses_flat,
+        'raw_random_losses': random_losses_flat,
+        'full_model_losses': model_losses,  # Keep full data for CSV generation
+        'full_random_losses': random_losses
     }
     
     print(f"\nEnergy Efficiency Results:")
@@ -128,6 +146,10 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
     print("Using ClosedFormDecoding.regressionCoordinates() - same as paper...")
     
     import ClosedFormDecoding
+    import os
+    
+    # Create necessary directories that ClosedFormDecoding expects
+    os.makedirs('EmergentPredictiveCoding/Results/Fig2_mscoco', exist_ok=True)
     
     # Set the same seed as analyseModels.py
     torch.manual_seed(2553)
@@ -339,6 +361,57 @@ def main():
         with open(args.save_results, 'wb') as f:
             pickle.dump(all_results, f)
         print(f"\nResults saved to {args.save_results}")
+    
+    # Generate losses.csv file in the same format as analyseModels.py
+    print("\nGenerating detailed losses.csv file for plotResults.py compatibility...")
+    
+    # Extract the detailed loss arrays from the energy efficiency evaluation
+    # Use full losses (all timesteps) for CSV generation, but note that plotResults.py will filter to timestep 0
+    model_losses_detailed = energy_results['full_model_losses']  # Shape: (batch_size, fixations=7, timesteps=6)
+    random_losses_detailed = energy_results['full_random_losses']  # Shape: (batch_size, fixations=7, timesteps=6)
+    
+    # Create the same structure as analyseModels.py (line 300-310)
+    # For temporal contrastive, we'll create a simplified version with just model vs random
+    import pandas as pd
+    
+    # Reshape losses to match expected format (batch_size, fixation*timestep)
+    # The losses should be (N_samples, 7_fixations * 6_timesteps) = (N, 42)
+    model_losses_reshaped = model_losses_detailed.reshape(-1, 42) if len(model_losses_detailed.shape) > 1 else model_losses_detailed.reshape(-1, 1)
+    random_losses_reshaped = random_losses_detailed.reshape(-1, 42) if len(random_losses_detailed.shape) > 1 else random_losses_detailed.reshape(-1, 1)
+    
+    # Create column names similar to analyseModels.py format
+    fixation_cols = []
+    timestep_cols = []
+    for fix in range(7):  # 7 fixations
+        for ts in range(6):  # 6 timesteps
+            fixation_cols.append(fix)
+            timestep_cols.append(ts)
+    
+    # Create multi-level column structure
+    model_columns = []
+    for i in range(len(fixation_cols)):
+        model_columns.append(('Temporal Contrastive', str(fixation_cols[i]), str(timestep_cols[i])))
+        
+    random_columns = []
+    for i in range(len(fixation_cols)):
+        random_columns.append(('Shuffled Temporal Contrastive', str(fixation_cols[i]), str(timestep_cols[i])))
+    
+    # Combine data
+    combined_data = np.concatenate([model_losses_reshaped, random_losses_reshaped], axis=1)
+    all_columns = model_columns + random_columns
+    
+    # Create DataFrame
+    df = pd.DataFrame(combined_data, columns=pd.MultiIndex.from_tuples(all_columns))
+    
+    # Save in the same location as analyseModels.py expects
+    losses_csv_path = 'EmergentPredictiveCoding/Results/Fig2_mscoco/temporal_contrastive_losses.csv'
+    import os
+    os.makedirs(os.path.dirname(losses_csv_path), exist_ok=True)
+    df.to_csv(losses_csv_path)
+    
+    print(f"Detailed losses saved to: {losses_csv_path}")
+    print(f"CSV shape: {df.shape}")
+    print(f"Compatible with plotResults.py for detailed analysis")
     
     print("\n" + "=" * 80)
     print("EVALUATION COMPLETED")
