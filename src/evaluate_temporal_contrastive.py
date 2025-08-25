@@ -164,8 +164,72 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         ('next_relative', 'Next relative position decoding')
     ]
     
+    # First, evaluate untrained model as baseline (same as analyseModels.py:207)
+    print("\n" + "="*50)
+    print("UNTRAINED MODEL BASELINE")
+    print("="*50)
+    
+    # Create untrained model with same architecture as temporal contrastive model
+    print("Creating untrained baseline model...")
+    untrained_net = RNN.State(
+        activation_func=torch.nn.ReLU(),
+        optimizer=torch.optim.Adam,
+        lr=1e-4,
+        input_size=128*128,
+        hidden_size=2048,
+        title="untrained_baseline",
+        device=net.device,
+        use_fixation=True,
+        seed=42,
+        use_conv=False,
+        warp_imgs=False,
+        use_resNet=False,
+        time_steps_img=6,
+        time_steps_cords=3,
+        mnist=False
+    )
+    
+    results['untrained'] = {}
+    
     for mode, description in modes_to_test:
-        print(f"\n{description} (mode='{mode}')")
+        print(f"\n[UNTRAINED] {description} (mode='{mode}')")
+        
+        # Reset seed for consistency
+        torch.manual_seed(2553)
+        np.random.seed(2553)
+        
+        pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
+            untrained_net, 
+            train_set, 
+            validation_set, 
+            layer=[1, 2],
+            mode=mode, 
+            timestep=None
+        )
+        
+        results['untrained'][mode] = {
+            'test_score': test_score,
+            'reg_weights': reg_weights,
+            'pred_cells': pred_cells,
+            'description': f"[UNTRAINED] {description}"
+        }
+        
+        print(f"[UNTRAINED] Test R² score: {test_score:.6f}")
+        print(f"[UNTRAINED] Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+    
+    # Now evaluate trained temporal contrastive model
+    print("\n" + "="*50)
+    print("TEMPORAL CONTRASTIVE MODEL")
+    print("="*50)
+    
+    results['trained'] = {}
+    
+    for mode, description in modes_to_test:
+        print(f"\n[TRAINED] {description} (mode='{mode}')")
+        
+        # Reset seed for consistency
+        torch.manual_seed(2553)
+        np.random.seed(2553)
         
         # Use the exact same call as analyseModels.py:207-209
         pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
@@ -178,25 +242,53 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         )
         
         # The function prints results internally, but we also collect them
-        results[mode] = {
+        results['trained'][mode] = {
             'test_score': test_score,
             'reg_weights': reg_weights,
             'pred_cells': pred_cells,
-            'description': description
+            'description': f"[TRAINED] {description}"
         }
         
-        print(f"Test R² score: {test_score:.6f}")
-        print(f"Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+        print(f"[TRAINED] Test R² score: {test_score:.6f}")
+        print(f"[TRAINED] Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+        
+        # Compare trained vs untrained
+        untrained_score = results['untrained'][mode]['test_score']
+        improvement = test_score - untrained_score
+        improvement_pct = (improvement / abs(untrained_score)) * 100 if untrained_score != 0 else float('inf')
+        
+        print(f"[COMPARISON] Improvement over untrained: {improvement:+.6f} ({improvement_pct:+.2f}%)")
+        print(f"[COMPARISON] {'BETTER' if improvement > 0 else 'WORSE'} than untrained baseline")
     
-    # Bootstrap confidence intervals for the main global decoding
-    print(f"\nComputing bootstrap confidence intervals for global decoding...")
+    # Bootstrap confidence intervals for global decoding comparison
+    print("\n" + "="*50)
+    print("BOOTSTRAP CONFIDENCE INTERVALS")
+    print("="*50)
     
-    # Run multiple bootstrap samples for confidence intervals
-    n_bootstrap = 100  # Reduced for speed, increase for more precision
-    global_scores = []
+    n_bootstrap = 50  # Reduced for speed
+    
+    # Bootstrap for untrained model
+    print(f"\nComputing bootstrap CI for UNTRAINED global decoding...")
+    untrained_global_scores = []
     
     for bootstrap_idx in range(n_bootstrap):
-        # Set different seed for each bootstrap sample
+        torch.manual_seed(2553 + bootstrap_idx)
+        np.random.seed(2553 + bootstrap_idx)
+        
+        try:
+            _, _, score = ClosedFormDecoding.regressionCoordinates(
+                untrained_net, train_set, validation_set, 
+                layer=[1, 2], mode='global', timestep=None
+            )
+            untrained_global_scores.append(score)
+        except:
+            continue
+    
+    # Bootstrap for trained model 
+    print(f"Computing bootstrap CI for TRAINED global decoding...")
+    trained_global_scores = []
+    
+    for bootstrap_idx in range(n_bootstrap):
         torch.manual_seed(2553 + bootstrap_idx)
         np.random.seed(2553 + bootstrap_idx)
         
@@ -205,38 +297,60 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
                 net, train_set, validation_set, 
                 layer=[1, 2], mode='global', timestep=None
             )
-            global_scores.append(score)
+            trained_global_scores.append(score)
         except:
-            # Skip failed bootstrap samples
             continue
         
         if (bootstrap_idx + 1) % 25 == 0:
             print(f"Bootstrap sample {bootstrap_idx + 1}/{n_bootstrap} completed")
     
-    if len(global_scores) > 0:
-        global_scores = np.array(global_scores)
-        mean_score = np.mean(global_scores)
-        std_score = np.std(global_scores)
-        sem_score = scipy.stats.sem(global_scores)
+    # Analyze bootstrap results
+    if len(untrained_global_scores) > 0 and len(trained_global_scores) > 0:
+        untrained_scores = np.array(untrained_global_scores)
+        trained_scores = np.array(trained_global_scores)
         
-        # 99% confidence interval using percentiles (more robust for small samples)
-        ci_lower = np.percentile(global_scores, (1 - confidence) / 2 * 100)
-        ci_upper = np.percentile(global_scores, (1 + confidence) / 2 * 100)
+        # Untrained stats
+        untrained_mean = np.mean(untrained_scores)
+        untrained_sem = scipy.stats.sem(untrained_scores)
+        untrained_ci_lower = np.percentile(untrained_scores, (1 - confidence) / 2 * 100)
+        untrained_ci_upper = np.percentile(untrained_scores, (1 + confidence) / 2 * 100)
         
-        results['global']['bootstrap_mean'] = mean_score
-        results['global']['bootstrap_std'] = std_score
-        results['global']['bootstrap_sem'] = sem_score
-        results['global']['bootstrap_ci_lower'] = ci_lower
-        results['global']['bootstrap_ci_upper'] = ci_upper
-        results['global']['bootstrap_samples'] = len(global_scores)
-        results['global']['confidence'] = confidence
+        # Trained stats  
+        trained_mean = np.mean(trained_scores)
+        trained_sem = scipy.stats.sem(trained_scores)
+        trained_ci_lower = np.percentile(trained_scores, (1 - confidence) / 2 * 100)
+        trained_ci_upper = np.percentile(trained_scores, (1 + confidence) / 2 * 100)
         
-        print(f"\nGlobal Decoding Bootstrap Results:")
-        print(f"Mean R² = {mean_score:.6f} ± {sem_score:.6f}")
-        print(f"{confidence*100}% CI: [{ci_lower:.6f}, {ci_upper:.6f}]")
-        print(f"Bootstrap samples: {len(global_scores)}")
+        # Statistical comparison
+        t_stat, p_value = scipy.stats.ttest_ind(trained_scores, untrained_scores, alternative='greater')
+        
+        # Store results
+        results['bootstrap_comparison'] = {
+            'untrained_mean': untrained_mean,
+            'untrained_sem': untrained_sem,
+            'untrained_ci_lower': untrained_ci_lower,
+            'untrained_ci_upper': untrained_ci_upper,
+            'trained_mean': trained_mean,
+            'trained_sem': trained_sem, 
+            'trained_ci_lower': trained_ci_lower,
+            'trained_ci_upper': trained_ci_upper,
+            't_statistic': t_stat,
+            'p_value': p_value,
+            'confidence': confidence,
+            'n_bootstrap': n_bootstrap
+        }
+        
+        print(f"\nBootstrap Global Decoding Comparison:")
+        print(f"UNTRAINED: R² = {untrained_mean:.6f} ± {untrained_sem:.6f}")
+        print(f"           {confidence*100}% CI: [{untrained_ci_lower:.6f}, {untrained_ci_upper:.6f}]")
+        print(f"TRAINED:   R² = {trained_mean:.6f} ± {trained_sem:.6f}")  
+        print(f"           {confidence*100}% CI: [{trained_ci_lower:.6f}, {trained_ci_upper:.6f}]")
+        print(f"IMPROVEMENT: {trained_mean - untrained_mean:+.6f}")
+        print(f"T-test (trained > untrained): t={t_stat:.4f}, p={p_value:.6f}")
+        print(f"Training {'significantly' if p_value < 0.01 else 'not significantly'} improves decoding")
+        print(f"Bootstrap samples: {len(trained_scores)} (trained), {len(untrained_scores)} (untrained)")
     else:
-        print("Warning: No successful bootstrap samples for confidence intervals")
+        print("Warning: Insufficient bootstrap samples for comparison")
     
     return results
 
