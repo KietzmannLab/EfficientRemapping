@@ -270,20 +270,29 @@ def main():
         mnist=False
     )
     
-    # Load model weights - temporal contrastive models use torch.save/load directly
-    print(f"Loading model state dict...")
-    state_dict = torch.load(args.model_path, map_location=device)
+    # Load temporal contrastive model checkpoint
+    print(f"Loading temporal contrastive model checkpoint...")
+    checkpoint = torch.load(args.model_path, map_location=device)
     
-    # Handle both raw state dict and checkpoint format
-    if 'model_state_dict' in state_dict:
-        model_state_dict = state_dict['model_state_dict']
-        print(f"Loaded checkpoint from epoch {state_dict.get('epoch', 'unknown')}")
+    print(f"Checkpoint keys: {list(checkpoint.keys())}")
+    
+    # Extract the base RNN model state dict from the temporal contrastive wrapper
+    if 'model' in checkpoint:
+        # The checkpoint contains the full RNNWithTemporalContrastive state
+        base_model_state = checkpoint['model']
+        print(f"Loading base RNN model from temporal contrastive checkpoint")
+        net.model.load_state_dict(base_model_state)
+    elif 'model_state_dict' in checkpoint:
+        # Standard checkpoint format
+        model_state_dict = checkpoint['model_state_dict']
+        print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
+        net.model.load_state_dict(model_state_dict)
     else:
-        model_state_dict = state_dict
+        # Try to load directly
+        net.model.load_state_dict(checkpoint)
     
-    # Load state dict into the model
-    net.model.load_state_dict(model_state_dict)
     net.model.eval()
+    print(f"Model loaded successfully!")
     
     print("=" * 80)
     print("TEMPORAL CONTRASTIVE MODEL EVALUATION")
