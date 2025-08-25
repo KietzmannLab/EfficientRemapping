@@ -362,22 +362,31 @@ def train_temporal_contrastive_model(config):
             save_path = f"{config['save_dir']}/{config['model_name']}_best.pth"
             os.makedirs(config['save_dir'], exist_ok=True)
             
-            # Save both model and contrastive projection head
+            # Save in standard ModelState format for compatibility with existing codebase
             state_dict = {
-                'model': model.model.state_dict(),
+                'epochs': epoch + 1,
+                'model_state_dict': model.model.state_dict(),  # Base RNN model
+                'optimizer_state_dict': model.optimizer.state_dict(),
+                'results': {'train_loss': avg_train_loss, 'val_loss': avg_val_loss},
+                # Additional temporal contrastive specific data
                 'contrastive_projection': model.contrastive_loss_fn.projection_head.state_dict(),
                 'config': config
             }
             torch.save(state_dict, save_path)
-            print(f'New best model saved: {save_path}')
+            print(f'New best model saved (ModelState format): {save_path}')
         
         # Save checkpoint every save_interval epochs
         if (epoch + 1) % config['save_interval'] == 0:
             save_path = f"{config['save_dir']}/{config['model_name']}_epoch_{epoch+1}.pth"
             os.makedirs(config['save_dir'], exist_ok=True)
             
+            # Save in standard ModelState format for compatibility
             state_dict = {
-                'model': model.model.state_dict(),
+                'epochs': epoch + 1,
+                'model_state_dict': model.model.state_dict(),  # Base RNN model
+                'optimizer_state_dict': model.optimizer.state_dict(),
+                'results': {'train_loss': avg_train_loss, 'val_loss': avg_val_loss},
+                # Additional temporal contrastive specific data
                 'contrastive_projection': model.contrastive_loss_fn.projection_head.state_dict(),
                 'config': config
             }

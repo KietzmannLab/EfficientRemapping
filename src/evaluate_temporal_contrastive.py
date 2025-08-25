@@ -276,19 +276,29 @@ def main():
     
     print(f"Checkpoint keys: {list(checkpoint.keys())}")
     
-    # Extract the base RNN model state dict from the temporal contrastive wrapper
-    if 'model' in checkpoint:
-        # The checkpoint contains the full RNNWithTemporalContrastive state
-        base_model_state = checkpoint['model']
-        print(f"Loading base RNN model from temporal contrastive checkpoint")
-        net.model.load_state_dict(base_model_state)
-    elif 'model_state_dict' in checkpoint:
-        # Standard checkpoint format
+    # Handle different checkpoint formats
+    if 'model_state_dict' in checkpoint:
+        # Standard ModelState format (new format)
         model_state_dict = checkpoint['model_state_dict']
-        print(f"Loaded checkpoint from epoch {checkpoint.get('epoch', 'unknown')}")
+        print(f"Loading model using standard ModelState format from epoch {checkpoint.get('epochs', 'unknown')}")
         net.model.load_state_dict(model_state_dict)
+        
+        # Also load optimizer and results if available for compatibility
+        if hasattr(net, 'optimizer') and 'optimizer_state_dict' in checkpoint:
+            net.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if 'results' in checkpoint:
+            net.results = checkpoint['results']
+        if 'epochs' in checkpoint:
+            net.epochs = checkpoint['epochs']
+            
+    elif 'model' in checkpoint:
+        # Legacy temporal contrastive format (old format)
+        base_model_state = checkpoint['model']
+        print(f"Loading base RNN model from legacy temporal contrastive checkpoint")
+        net.model.load_state_dict(base_model_state)
     else:
-        # Try to load directly
+        # Try to load directly as raw state dict
+        print(f"Attempting to load as raw state dict")
         net.model.load_state_dict(checkpoint)
     
     net.model.eval()
