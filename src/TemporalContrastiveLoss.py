@@ -293,15 +293,14 @@ class BatchTemporalContrastiveLoss(nn.Module):
         
     def reset_sequence(self):
         """Reset for new batch - called at start of each batch processing."""
-        # Optionally store a few features from current batch as global negatives (fallback only)
-        if len(self.current_batch_history) > 2:  # Only if we had meaningful history
-            # Store just a few random features as fallback negatives
-            last_timestep = self.current_batch_history[-1]
-            if len(last_timestep) > 0:
-                n_to_store = min(5, len(last_timestep))  # Much fewer since it's just fallback
-                sampled_indices = random.sample(range(len(last_timestep)), n_to_store)
-                for idx in sampled_indices:
-                    self.global_negative_buffer.append(last_timestep[idx].detach())
+        # Store features from current batch as future negatives
+        if len(self.current_batch_history) > 0:
+            for timestep_features in self.current_batch_history[-5:]:
+                if len(timestep_features) > 0:
+                    n_to_sample = min(len(timestep_features), 10)
+                    sampled_indices = random.sample(range(len(timestep_features)), n_to_sample)
+                    for idx in sampled_indices:
+                        self.global_negative_buffer.append(timestep_features[idx].detach())
         
         self.current_batch_history = []
         self.current_timestep = 0
@@ -342,38 +341,17 @@ class BatchTemporalContrastiveLoss(nn.Module):
                 anchor = current_features[b]
                 positive = positive_features[b]
                 
-                # OPTIMIZED: Use within-batch negatives from different scenes
+                # FIXED: Only collect negatives from DIFFERENT SCENES (not current batch)
                 negatives = []
                 
-                # Collect negatives from OTHER scenes in current batch (much faster!)
-                # 1. Other scenes at current timestep
-                for other_b in range(batch_size):
-                    if other_b != b:  # Different scene
-                        negatives.append(current_features[other_b])
-                
-                # 2. Other scenes from positive timestep (if available)
-                if len(positive_features) > 1:
-                    for other_b in range(len(positive_features)):
-                        if other_b != b:  # Different scene
-                            negatives.append(positive_features[other_b])
-                
-                # 3. Other scenes from other timesteps in current batch
-                for t in range(len(self.current_batch_history)):
-                    if t != self.current_timestep and len(self.current_batch_history[t]) > 0:
-                        # Sample random scenes from this timestep
-                        available_scenes = [f for idx, f in enumerate(self.current_batch_history[t]) if idx != b]
-                        if len(available_scenes) > 0:
-                            negatives.extend(random.sample(available_scenes, min(2, len(available_scenes))))
-                
-                # 4. Fallback to global buffer only if not enough within-batch negatives
-                if len(negatives) < self.min_negatives and len(self.global_negative_buffer) > 0:
-                    needed = self.min_negatives - len(negatives)
-                    global_negs = random.sample(list(self.global_negative_buffer), min(needed, len(self.global_negative_buffer)))
+                # Only use global negative buffer from previous batches/scenes
+                # This ensures ALL negatives are from different scenes
+                if len(self.global_negative_buffer) >= self.min_negatives:
+                    # Sample all negatives from global buffer (guaranteed different scenes)
+                    n_available = len(self.global_negative_buffer)
+                    n_to_sample = min(self.negative_samples, n_available)
+                    global_negs = random.sample(list(self.global_negative_buffer), n_to_sample)
                     negatives.extend(global_negs)
-                
-                # Sample down if too many negatives
-                if len(negatives) > self.negative_samples:
-                    negatives = random.sample(negatives, self.negative_samples)
                 
                 # Only compute loss if we have enough negatives
                 if len(negatives) >= self.min_negatives:

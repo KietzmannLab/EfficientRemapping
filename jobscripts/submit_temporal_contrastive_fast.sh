@@ -60,7 +60,7 @@ python src/train_temporal_contrastive.py \
     --learning_rate 1e-7 \
     --time_steps_img 6 \
     --time_steps_cords 3 \
-    --model_name "temporal_contrastive_fast_lr1e7_bs256" \
+    --model_name "temporal_contrastive_global_negatives_fast_lr1e7_bs256" \
     --save_dir "/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive" \
     --log_interval 10 \
     --save_interval 50 \
@@ -73,7 +73,7 @@ echo "Job finished at: $(date)"
 
 echo ""
 echo "Fast training optimizations applied:"
-echo "- Learning rate: 1e-4 → 5e-4 (5x higher)"
+echo "- Learning rate: 1e-4 → 1e-7 (much lower for stability)"
 echo "- Batch size: 1024 → 256 (4x smaller, better for contrastive learning)"
 echo "- Epochs: 1500 → 500 (3x fewer for quick results)"
 echo "- Temperature: 0.5 → 0.3 (more discriminative)"
