@@ -157,11 +157,9 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
     
     results = {}
     
-    # Test the exact same modes as analyseModels.py:207-209
+    # Only test global position decoding (as requested - cleaner output)
     modes_to_test = [
-        ('global', 'Global position decoding'),
-        ('prev_relative', 'Previous relative position decoding'), 
-        ('next_relative', 'Next relative position decoding')
+        ('global', 'Global position decoding')
     ]
     
     # First, evaluate untrained model as baseline (same as analyseModels.py:207)
@@ -198,6 +196,13 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         torch.manual_seed(2553)
         np.random.seed(2553)
         
+        # Capture output to extract R² values cleanly
+        import sys
+        from io import StringIO
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        
         pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
             untrained_net, 
             train_set, 
@@ -207,15 +212,32 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
             timestep=None
         )
         
+        # Capture and parse output
+        captured_output = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        
+        # Extract individual R² values from captured output
+        r_squared_line = [line for line in captured_output.split('\n') if 'R squared:' in line]
+        if r_squared_line:
+            # Parse the R² values - they're in format: "R squared: [[x_r2 y_r2]]"
+            r_squared_str = r_squared_line[0].split('R squared: ')[1]
+            r_squared_values = eval(r_squared_str)[0]  # Extract from nested array
+            r2_x, r2_y = r_squared_values[0], r_squared_values[1]
+        else:
+            r2_x, r2_y = None, None
+        
         results['untrained'][mode] = {
             'test_score': test_score,
             'reg_weights': reg_weights,
             'pred_cells': pred_cells,
+            'r2_x': r2_x,
+            'r2_y': r2_y,
             'description': f"[UNTRAINED] {description}"
         }
         
-        print(f"[UNTRAINED] Test R² score: {test_score:.6f}")
-        print(f"[UNTRAINED] Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+        print(f"[UNTRAINED] X-coordinate R²: {r2_x:.6f}")
+        print(f"[UNTRAINED] Y-coordinate R²: {r2_y:.6f}")
+        print(f"[UNTRAINED] Overall test score: {test_score:.6f}")
     
     # Now evaluate trained temporal contrastive model
     print("\n" + "="*50)
@@ -231,6 +253,13 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         torch.manual_seed(2553)
         np.random.seed(2553)
         
+        # Capture output to extract R² values cleanly
+        import sys
+        from io import StringIO
+        
+        old_stdout = sys.stdout
+        sys.stdout = StringIO()
+        
         # Use the exact same call as analyseModels.py:207-209
         pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
             net, 
@@ -241,16 +270,33 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
             timestep=None  # Same as paper - uses all timesteps
         )
         
+        # Capture and parse output
+        captured_output = sys.stdout.getvalue()
+        sys.stdout = old_stdout
+        
+        # Extract individual R² values from captured output
+        r_squared_line = [line for line in captured_output.split('\n') if 'R squared:' in line]
+        if r_squared_line:
+            # Parse the R² values - they're in format: "R squared: [[x_r2 y_r2]]"
+            r_squared_str = r_squared_line[0].split('R squared: ')[1]
+            r_squared_values = eval(r_squared_str)[0]  # Extract from nested array
+            r2_x, r2_y = r_squared_values[0], r_squared_values[1]
+        else:
+            r2_x, r2_y = None, None
+        
         # The function prints results internally, but we also collect them
         results['trained'][mode] = {
             'test_score': test_score,
             'reg_weights': reg_weights,
             'pred_cells': pred_cells,
+            'r2_x': r2_x,
+            'r2_y': r2_y,
             'description': f"[TRAINED] {description}"
         }
         
-        print(f"[TRAINED] Test R² score: {test_score:.6f}")
-        print(f"[TRAINED] Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+        print(f"[TRAINED] X-coordinate R²: {r2_x:.6f}")
+        print(f"[TRAINED] Y-coordinate R²: {r2_y:.6f}")
+        print(f"[TRAINED] Overall test score: {test_score:.6f}")
         
         # Compare trained vs untrained
         untrained_score = results['untrained'][mode]['test_score']
