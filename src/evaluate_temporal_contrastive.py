@@ -16,202 +16,203 @@ from H5dataset import H5dataset
 from ClosedFormDecoding import getFeatures
 
 
-def evaluate_preactivation_loss(net, test_set, batch_size=1024, confidence=0.99):
+def evaluate_energy_efficiency(net, validation_set, confidence=0.99):
     """
-    Evaluate L1 preactivation loss across all layers and timesteps with confidence intervals.
-    Uses existing RNN infrastructure (net.run with 'l1_all' loss function).
+    Evaluate energy efficiency using the EXACT methodology from analyseModels.py.
+    Uses plot.compare_random_fixations() to compare model vs shuffled fixations.
     
     Args:
         net: Trained RNN model
-        test_set: Test dataset
-        batch_size: Batch size for evaluation
+        validation_set: Validation dataset (same as paper)
         confidence: Confidence level for intervals
         
     Returns:
-        dict with loss statistics and confidence intervals
+        dict with energy efficiency results and confidence intervals
     """
-    print("Evaluating L1 preactivation loss (energy efficiency)...")
+    print("Evaluating energy efficiency (following analyseModels.py methodology)...")
+    print("Using plot.compare_random_fixations() - same as paper...")
     
-    net.model.eval()
-    losses = []
+    import plot
     
-    with torch.no_grad():
-        loader = test_set.create_batches(batch_size=batch_size, shuffle=False)
-        
-        for batch_idx, (batch, fixations) in enumerate(loader):
-            # Use existing infrastructure: net.run with 'l1_all' loss function
-            loss, _, _ = net.run(batch, fixations, 'l1_all', None)
-            losses.append(loss.item())
-            
-            if (batch_idx + 1) % 10 == 0:
-                print(f"Processed {batch_idx + 1} batches, current avg loss: {np.mean(losses):.6f}")
+    # Set the same seed as analyseModels.py
+    torch.manual_seed(2553)
+    np.random.seed(2553)
     
-    # Calculate statistics with confidence intervals (following codebase method from plot.py:1108-1109)
-    losses = np.array(losses)
-    mean_loss = np.mean(losses)
-    std_loss = np.std(losses)
-    sem_loss = scipy.stats.sem(losses)
+    # Use the exact same call as analyseModels.py:223
+    losses, losses_random_fix, fixations = plot.compare_random_fixations(
+        net, 
+        validation_set, 
+        loss_fn='l1_all',  # Same loss function as paper
+        use_conv=net.model.use_conv,
+        warp_imgs=True,  # Same as WARP_IMGS=True in analyseModels.py
+        use_resNet=False, # Same as USE_RES_NET=False in analyseModels.py
+        feature_size=128*128,  # Same as INPUT_SIZE in analyseModels.py
+        mnist=False,
+        return_fixations=True
+    )
     
-    # 99% Confidence interval using normal distribution (as in existing codebase)
+    # Convert to numpy arrays for analysis
+    model_losses = np.array(losses).flatten()
+    random_losses = np.array(losses_random_fix).flatten()
+    
+    # Calculate statistics with confidence intervals
+    mean_loss = np.mean(model_losses)
+    mean_random_loss = np.mean(random_losses)
+    std_loss = np.std(model_losses)
+    std_random_loss = np.std(random_losses)
+    sem_loss = scipy.stats.sem(model_losses)
+    sem_random_loss = scipy.stats.sem(random_losses)
+    
+    # 99% Confidence intervals
     ci_lower, ci_upper = scipy.stats.norm.interval(
         confidence=confidence, 
         loc=mean_loss, 
         scale=sem_loss
     )
+    ci_lower_random, ci_upper_random = scipy.stats.norm.interval(
+        confidence=confidence, 
+        loc=mean_random_loss, 
+        scale=sem_random_loss
+    )
+    
+    # Statistical significance test (same as paper)
+    t_stat, p_value = scipy.stats.ttest_ind(model_losses, random_losses, alternative='less')
     
     results = {
-        'mean_loss': mean_loss,
-        'std_loss': std_loss,
-        'sem_loss': sem_loss,
-        'ci_lower': ci_lower,
-        'ci_upper': ci_upper,
+        'model_loss_mean': mean_loss,
+        'model_loss_std': std_loss,
+        'model_loss_sem': sem_loss,
+        'model_loss_ci_lower': ci_lower,
+        'model_loss_ci_upper': ci_upper,
+        'random_loss_mean': mean_random_loss,
+        'random_loss_std': std_random_loss,
+        'random_loss_sem': sem_random_loss,
+        'random_loss_ci_lower': ci_lower_random,
+        'random_loss_ci_upper': ci_upper_random,
+        't_statistic': t_stat,
+        'p_value': p_value,
         'confidence': confidence,
-        'n_samples': len(losses),
-        'raw_losses': losses
+        'n_samples': len(model_losses),
+        'raw_model_losses': model_losses,
+        'raw_random_losses': random_losses
     }
     
-    print(f"\nL1 Preactivation Loss Results:")
-    print(f"Mean loss: {mean_loss:.6f}")
-    print(f"Standard deviation: {std_loss:.6f}")
-    print(f"Standard error: {sem_loss:.6f}")
-    print(f"{confidence*100}% Confidence interval: [{ci_lower:.6f}, {ci_upper:.6f}]")
-    print(f"Number of test batches: {len(losses)}")
+    print(f"\nEnergy Efficiency Results:")
+    print(f"Model loss: {mean_loss:.6f} ± {sem_loss:.6f}")
+    print(f"{confidence*100}% CI: [{ci_lower:.6f}, {ci_upper:.6f}]")
+    print(f"Random fixations loss: {mean_random_loss:.6f} ± {sem_random_loss:.6f}")
+    print(f"{confidence*100}% CI: [{ci_lower_random:.6f}, {ci_upper_random:.6f}]")
+    print(f"T-test (model < random): t={t_stat:.4f}, p={p_value:.6f}")
+    print(f"Model is {'significantly' if p_value < 0.01 else 'not significantly'} more efficient")
     
     return results
 
 
-def evaluate_xy_decoding(net, train_set, test_set, confidence=0.99):
+def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
     """
-    Evaluate XY position decoding performance using closed-form linear regression.
-    Uses existing ClosedFormDecoding infrastructure - no pre-training needed.
+    Evaluate XY position decoding using EXACT methodology from analyseModels.py.
+    Uses ClosedFormDecoding.regressionCoordinates() - same as paper.
     
     Args:
         net: Trained RNN model 
         train_set: Training dataset for fitting decoder
-        test_set: Test dataset for evaluation
+        validation_set: Validation dataset for evaluation (same as paper)
         confidence: Confidence level for intervals
         
     Returns:
         dict with decoding performance statistics and confidence intervals
     """
-    print("\nEvaluating XY position decoding performance using closed-form approach...")
+    print("\nEvaluating XY position decoding using analyseModels.py methodology...")
+    print("Using ClosedFormDecoding.regressionCoordinates() - same as paper...")
+    
+    import ClosedFormDecoding
+    
+    # Set the same seed as analyseModels.py
+    torch.manual_seed(2553)
+    np.random.seed(2553)
     
     results = {}
     
-    # Test layers 1 and 2 (following existing infrastructure)
-    for layer in [1, 2]:
-        results[f'layer_{layer}'] = {}
+    # Test the exact same modes as analyseModels.py:207-209
+    modes_to_test = [
+        ('global', 'Global position decoding'),
+        ('prev_relative', 'Previous relative position decoding'), 
+        ('next_relative', 'Next relative position decoding')
+    ]
+    
+    for mode, description in modes_to_test:
+        print(f"\n{description} (mode='{mode}')")
         
-        # Test different timesteps
-        for timestep in range(6):
-            print(f"Testing layer {layer}, timestep {timestep}")
-            
-            # Test both current position and next position decoding
-            for mode, condition in [('global', 'current'), ('next_relative', 'next')]:
-                print(f"  Mode: {mode} (predicting {condition} fixation)")
-                
-                # Extract features using existing infrastructure
-                X_train, Y_train = getFeatures(net, train_set, layer_idx=[layer], timestep=timestep)
-                X_test, Y_test = getFeatures(net, test_set, layer_idx=[layer], timestep=timestep)
-                
-                # Handle relative coordinates if needed
-                if mode == 'next_relative':
-                    # Convert to relative coordinates (simplified version of changeToRelativeCoordinates)
-                    if timestep is None:
-                        # For all timesteps, convert to relative coordinates
-                        Y_train_rel = np.zeros_like(Y_train)
-                        Y_test_rel = np.zeros_like(Y_test)
-                        seq_len = 7
-                        for i in range(len(Y_train)):
-                            seq_idx = i % (seq_len * 6)  # 6 timesteps per fixation
-                            fix_idx = seq_idx // 6
-                            if fix_idx < seq_len - 1:  # Not the last fixation
-                                next_fix_start = ((i // (seq_len * 6)) * seq_len + fix_idx + 1) * 6
-                                if next_fix_start < len(Y_train):
-                                    Y_train_rel[i] = Y_train[next_fix_start] - Y_train[i]
-                        Y_train = Y_train_rel
-                        Y_test = Y_test_rel
-                    else:
-                        # For specific timestep, convert to next fixation coordinates
-                        Y_train_rel = np.zeros_like(Y_train)
-                        Y_test_rel = np.zeros_like(Y_test)
-                        seq_len = 7
-                        for i in range(len(Y_train)):
-                            fix_idx = i % seq_len
-                            if fix_idx < seq_len - 1:  # Not the last fixation
-                                next_fix_idx = i + 1
-                                if next_fix_idx < len(Y_train):
-                                    Y_train_rel[i] = Y_train[next_fix_idx] - Y_train[i]
-                        Y_train = Y_train_rel
-                        Y_test = Y_test_rel
-                
-                # Normalize features
-                norm_factors = np.mean(X_train, axis=0)
-                norm_factors += np.ones_like(norm_factors) * 0.000001
-                X_train_norm = X_train / norm_factors
-                X_test_norm = X_test / norm_factors
-                
-                # Fit linear regression (closed-form)
-                reg = LinearRegression().fit(X_train_norm, Y_train)
-                
-                # Compute R² on test set
-                test_score = reg.score(X_test_norm, Y_test)
-                
-                # Get predictions for detailed R² calculation
-                pred_Y = reg.predict(X_test_norm)
-                
-                # Calculate R² per coordinate (x, y)
-                target_mean = Y_test.mean(axis=0)
-                s_res = np.sum(np.square(Y_test - pred_Y), axis=0)
-                s_tot = np.sum(np.square(Y_test - target_mean), axis=0)
-                r_squared_per_coord = 1 - np.divide(s_res, s_tot)
-                
-                # Bootstrap confidence intervals for R²
-                n_bootstrap = 1000
-                r_squared_bootstrap = []
-                
-                np.random.seed(42)  # Reproducible results
-                n_samples = len(Y_test)
-                
-                for _ in range(n_bootstrap):
-                    # Bootstrap sample
-                    indices = np.random.choice(n_samples, n_samples, replace=True)
-                    X_boot = X_test_norm[indices]
-                    Y_boot = Y_test[indices]
-                    
-                    # Compute R² on bootstrap sample
-                    pred_boot = reg.predict(X_boot)
-                    target_mean_boot = Y_boot.mean(axis=0)
-                    s_res_boot = np.sum(np.square(Y_boot - pred_boot), axis=0)
-                    s_tot_boot = np.sum(np.square(Y_boot - target_mean_boot), axis=0)
-                    r_squared_boot = 1 - np.divide(s_res_boot, s_tot_boot)
-                    r_squared_bootstrap.append(np.mean(r_squared_boot))  # Average over x,y
-                
-                r_squared_bootstrap = np.array(r_squared_bootstrap)
-                
-                # Calculate 99% confidence intervals using percentiles
-                ci_lower = np.percentile(r_squared_bootstrap, (1 - confidence) / 2 * 100)
-                ci_upper = np.percentile(r_squared_bootstrap, (1 + confidence) / 2 * 100)
-                
-                mean_r2 = np.mean(r_squared_per_coord)
-                std_r2 = np.std(r_squared_bootstrap)
-                
-                results[f'layer_{layer}'][f'timestep_{timestep}_{condition}'] = {
-                    'r_squared_mean': mean_r2,
-                    'r_squared_std': std_r2,
-                    'r_squared_ci_lower': ci_lower,
-                    'r_squared_ci_upper': ci_upper,
-                    'r_squared_x': r_squared_per_coord[0],
-                    'r_squared_y': r_squared_per_coord[1],
-                    'test_score': test_score,
-                    'confidence': confidence,
-                    'n_bootstrap': n_bootstrap,
-                    'n_test_samples': len(Y_test)
-                }
-                
-                print(f"    R² = {mean_r2:.6f} (x: {r_squared_per_coord[0]:.6f}, y: {r_squared_per_coord[1]:.6f})")
-                print(f"    {confidence*100}% CI: [{ci_lower:.6f}, {ci_upper:.6f}]")
-                print(f"    Overall test score: {test_score:.6f}")
+        # Use the exact same call as analyseModels.py:207-209
+        pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
+            net, 
+            train_set, 
+            validation_set, 
+            layer=[1, 2],  # Same layers as paper
+            mode=mode, 
+            timestep=None  # Same as paper - uses all timesteps
+        )
+        
+        # The function prints results internally, but we also collect them
+        results[mode] = {
+            'test_score': test_score,
+            'reg_weights': reg_weights,
+            'pred_cells': pred_cells,
+            'description': description
+        }
+        
+        print(f"Test R² score: {test_score:.6f}")
+        print(f"Number of predictive cells: {len(pred_cells) if pred_cells is not None else 'N/A'}")
+    
+    # Bootstrap confidence intervals for the main global decoding
+    print(f"\nComputing bootstrap confidence intervals for global decoding...")
+    
+    # Run multiple bootstrap samples for confidence intervals
+    n_bootstrap = 100  # Reduced for speed, increase for more precision
+    global_scores = []
+    
+    for bootstrap_idx in range(n_bootstrap):
+        # Set different seed for each bootstrap sample
+        torch.manual_seed(2553 + bootstrap_idx)
+        np.random.seed(2553 + bootstrap_idx)
+        
+        try:
+            _, _, score = ClosedFormDecoding.regressionCoordinates(
+                net, train_set, validation_set, 
+                layer=[1, 2], mode='global', timestep=None
+            )
+            global_scores.append(score)
+        except:
+            # Skip failed bootstrap samples
+            continue
+        
+        if (bootstrap_idx + 1) % 25 == 0:
+            print(f"Bootstrap sample {bootstrap_idx + 1}/{n_bootstrap} completed")
+    
+    if len(global_scores) > 0:
+        global_scores = np.array(global_scores)
+        mean_score = np.mean(global_scores)
+        std_score = np.std(global_scores)
+        sem_score = scipy.stats.sem(global_scores)
+        
+        # 99% confidence interval using percentiles (more robust for small samples)
+        ci_lower = np.percentile(global_scores, (1 - confidence) / 2 * 100)
+        ci_upper = np.percentile(global_scores, (1 + confidence) / 2 * 100)
+        
+        results['global']['bootstrap_mean'] = mean_score
+        results['global']['bootstrap_std'] = std_score
+        results['global']['bootstrap_sem'] = sem_score
+        results['global']['bootstrap_ci_lower'] = ci_lower
+        results['global']['bootstrap_ci_upper'] = ci_upper
+        results['global']['bootstrap_samples'] = len(global_scores)
+        results['global']['confidence'] = confidence
+        
+        print(f"\nGlobal Decoding Bootstrap Results:")
+        print(f"Mean R² = {mean_score:.6f} ± {sem_score:.6f}")
+        print(f"{confidence*100}% CI: [{ci_lower:.6f}, {ci_upper:.6f}]")
+        print(f"Bootstrap samples: {len(global_scores)}")
+    else:
+        print("Warning: No successful bootstrap samples for confidence intervals")
     
     return results
 
@@ -242,9 +243,10 @@ def main():
     
     print(f"Using device: {device}")
     
-    # Load datasets using existing infrastructure
+    # Load datasets using existing infrastructure (same as analyseModels.py)
     print(f"Loading datasets from {args.dataset_path}")
     train_set = H5dataset('train', args.dataset_path, device=device, use_color=False)
+    validation_set = H5dataset('val', args.dataset_path, device=device, use_color=False)  # Use val split like paper
     test_set = H5dataset('test', args.dataset_path, device=device, use_color=False)
     
     # Load trained model using existing RNN infrastructure
@@ -308,19 +310,19 @@ def main():
     print("TEMPORAL CONTRASTIVE MODEL EVALUATION")
     print("=" * 80)
     
-    # 1. Evaluate L1 preactivation loss (energy efficiency)
-    preactivation_results = evaluate_preactivation_loss(
-        net, test_set, args.batch_size, args.confidence
+    # 1. Evaluate energy efficiency using EXACT analyseModels.py methodology
+    energy_results = evaluate_energy_efficiency(
+        net, validation_set, args.confidence
     )
     
-    # 2. Evaluate XY decoding performance using closed-form approach
+    # 2. Evaluate XY decoding using EXACT analyseModels.py methodology  
     decoding_results = evaluate_xy_decoding(
-        net, train_set, test_set, args.confidence
+        net, train_set, validation_set, args.confidence
     )
     
     # Combine results
     all_results = {
-        'preactivation_loss': preactivation_results,
+        'energy_efficiency': energy_results,
         'xy_decoding': decoding_results,
         'model_path': args.model_path,
         'dataset_path': args.dataset_path,
