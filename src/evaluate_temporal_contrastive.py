@@ -9,6 +9,7 @@ import argparse
 import torch
 import numpy as np
 import scipy.stats
+import scipy
 from sklearn.linear_model import LinearRegression
 import RNN
 import functions
@@ -63,17 +64,18 @@ def evaluate_energy_efficiency(net, validation_set, confidence=0.99):
     sem_loss = scipy.stats.sem(model_losses)
     sem_random_loss = scipy.stats.sem(random_losses)
     
-    # 99% Confidence intervals
-    ci_lower, ci_upper = scipy.stats.norm.interval(
-        confidence=confidence, 
-        loc=mean_loss, 
-        scale=sem_loss
-    )
-    ci_lower_random, ci_upper_random = scipy.stats.norm.interval(
-        confidence=confidence, 
-        loc=mean_random_loss, 
-        scale=sem_random_loss
-    )
+    # 99% Confidence intervals using t-distribution (more robust)
+    alpha = 1 - confidence
+    dof = len(model_losses) - 1
+    t_critical = scipy.stats.t.ppf(1 - alpha/2, dof)
+    
+    ci_lower = mean_loss - t_critical * sem_loss
+    ci_upper = mean_loss + t_critical * sem_loss
+    
+    dof_random = len(random_losses) - 1
+    t_critical_random = scipy.stats.t.ppf(1 - alpha/2, dof_random)
+    ci_lower_random = mean_random_loss - t_critical_random * sem_random_loss
+    ci_upper_random = mean_random_loss + t_critical_random * sem_random_loss
     
     # Statistical significance test (same as paper)
     t_stat, p_value = scipy.stats.ttest_ind(model_losses, random_losses, alternative='less')
