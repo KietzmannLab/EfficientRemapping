@@ -270,8 +270,19 @@ def main():
         mnist=False
     )
     
-    # Load model weights
-    net.load_state_dict(torch.load(args.model_path, map_location=device))
+    # Load model weights - temporal contrastive models use torch.save/load directly
+    print(f"Loading model state dict...")
+    state_dict = torch.load(args.model_path, map_location=device)
+    
+    # Handle both raw state dict and checkpoint format
+    if 'model_state_dict' in state_dict:
+        model_state_dict = state_dict['model_state_dict']
+        print(f"Loaded checkpoint from epoch {state_dict.get('epoch', 'unknown')}")
+    else:
+        model_state_dict = state_dict
+    
+    # Load state dict into the model
+    net.model.load_state_dict(model_state_dict)
     net.model.eval()
     
     print("=" * 80)
