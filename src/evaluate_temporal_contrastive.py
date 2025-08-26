@@ -221,8 +221,14 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         if r_squared_line:
             # Parse the R² values - they're in format: "R squared: [[x_r2 y_r2]]"
             r_squared_str = r_squared_line[0].split('R squared: ')[1]
-            r_squared_values = eval(r_squared_str)[0]  # Extract from nested array
-            r2_x, r2_y = r_squared_values[0], r_squared_values[1]
+            # Use regex to extract numbers safely instead of eval()
+            import re
+            # Extract numbers from the string using regex
+            numbers = re.findall(r'[0-9]+\.?[0-9]*', r_squared_str)
+            if len(numbers) >= 2:
+                r2_x, r2_y = float(numbers[0]), float(numbers[1])
+            else:
+                r2_x, r2_y = None, None
         else:
             r2_x, r2_y = None, None
         
@@ -279,8 +285,14 @@ def evaluate_xy_decoding(net, train_set, validation_set, confidence=0.99):
         if r_squared_line:
             # Parse the R² values - they're in format: "R squared: [[x_r2 y_r2]]"
             r_squared_str = r_squared_line[0].split('R squared: ')[1]
-            r_squared_values = eval(r_squared_str)[0]  # Extract from nested array
-            r2_x, r2_y = r_squared_values[0], r_squared_values[1]
+            # Use regex to extract numbers safely instead of eval()
+            import re
+            # Extract numbers from the string using regex
+            numbers = re.findall(r'[0-9]+\.?[0-9]*', r_squared_str)
+            if len(numbers) >= 2:
+                r2_x, r2_y = float(numbers[0]), float(numbers[1])
+            else:
+                r2_x, r2_y = None, None
         else:
             r2_x, r2_y = None, None
         
