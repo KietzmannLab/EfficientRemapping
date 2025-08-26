@@ -495,9 +495,63 @@ def main():
     print("=" * 80)
     
     # 1. Evaluate energy efficiency using EXACT analyseModels.py methodology
-    energy_results = evaluate_energy_efficiency(
+    print("\n" + "="*50)
+    print("ENERGY EFFICIENCY EVALUATION")
+    print("="*50)
+    
+    # First evaluate untrained baseline
+    print("\nCreating untrained baseline model for energy efficiency...")
+    untrained_net = RNN.State(
+        activation_func=torch.nn.ReLU(),
+        optimizer=torch.optim.Adam,
+        lr=1e-4,
+        input_size=128*128,
+        hidden_size=2048,
+        title="untrained_baseline_energy",
+        device=net.device,
+        use_fixation=True,
+        seed=42,
+        use_conv=False,
+        warp_imgs=False,
+        use_resNet=False,
+        time_steps_img=6,
+        time_steps_cords=3,
+        mnist=False
+    )
+    
+    print("\n[UNTRAINED] Energy efficiency evaluation:")
+    untrained_energy_results = evaluate_energy_efficiency(
+        untrained_net, validation_set, args.confidence
+    )
+    
+    print("\n[TRAINED] Energy efficiency evaluation:")
+    trained_energy_results = evaluate_energy_efficiency(
         net, validation_set, args.confidence
     )
+    
+    # Compare trained vs untrained energy efficiency
+    trained_loss = trained_energy_results['model_loss_mean']
+    untrained_loss = untrained_energy_results['model_loss_mean']
+    energy_improvement = untrained_loss - trained_loss  # Lower loss is better
+    energy_improvement_pct = (energy_improvement / abs(untrained_loss)) * 100 if untrained_loss != 0 else 0
+    
+    print(f"\n[ENERGY EFFICIENCY COMPARISON]")
+    print(f"UNTRAINED: {untrained_loss:.6f} ± {untrained_energy_results['model_loss_sem']:.6f}")
+    print(f"TRAINED:   {trained_loss:.6f} ± {trained_energy_results['model_loss_sem']:.6f}")
+    print(f"IMPROVEMENT: {energy_improvement:+.6f} ({energy_improvement_pct:+.2f}%)")
+    print(f"Training {'IMPROVES' if energy_improvement > 0 else 'WORSENS'} energy efficiency")
+    
+    # Combine energy results
+    energy_results = {
+        'untrained': untrained_energy_results,
+        'trained': trained_energy_results,
+        'comparison': {
+            'improvement': energy_improvement,
+            'improvement_pct': energy_improvement_pct,
+            'untrained_loss': untrained_loss,
+            'trained_loss': trained_loss
+        }
+    }
     
     # 2. Evaluate XY decoding using EXACT analyseModels.py methodology  
     decoding_results = evaluate_xy_decoding(

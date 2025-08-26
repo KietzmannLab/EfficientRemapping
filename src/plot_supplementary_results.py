@@ -13,9 +13,9 @@ import os
 # Set style to match paper
 sns.set_context('talk')
 
-# Data from Thomas's results + new temporal contrastive results
+# Data from Thomas's results + new temporal contrastive results + untrained baseline
 models = ['full model', '4 timesteps', '8 timesteps', '1 hidden\nlayer', '3 hidden\nlayers', 
-          'categorisation\n(supervised)', 'temporal contrastive\nobjective']
+          'categorisation\n(supervised)', 'temporal contrastive\nobjective', 'untrained\nbaseline']
 
 # Loss data: (mean, lower_99CI, upper_99CI)
 loss_data = [
@@ -25,10 +25,11 @@ loss_data = [
     (0.1335439, 0.1325247788863055, 0.13456300850344974),   # 1 hidden layer
     (0.12374754, 0.12280473117477891, 0.12469035382621291), # 3 hidden layers
     (0.3195281, 0.3182375727972682, 0.3208186329522435),    # supervised (epoch 100)
-    (0.423138, 0.420405, 0.425870)  # temporal contrastive - NEW RESULTS
+    (0.423138, 0.420405, 0.425870),  # temporal contrastive - NEW RESULTS
+    (0, 0, 0)  # untrained baseline (no loss data)
 ]
 
-# R² data: [x_coordinate, y_coordinate] 
+# R² data: [x_coordinate, y_coordinate] - Global decoding results
 r2_data = [
     [0.91, 0.93],           # full model (original)
     [0.96726419, 0.97306166],  # 4 timesteps
@@ -36,7 +37,8 @@ r2_data = [
     [0.79468732, 0.80130765],  # 1 hidden layer
     [0.94286285, 0.95643485],  # 3 hidden layers
     [0.48640877, 0.55557019],  # supervised (epoch 100)
-    [0.47562987, 0.50586957]   # temporal contrastive - ACTUAL RESULTS
+    [0.47562987, 0.50586957],  # temporal contrastive - UPDATED GLOBAL RESULTS (Test R²: 0.490693)
+    [0.47897762, 0.48458517]   # untrained baseline - GLOBAL RESULTS (Test R²: 0.481723)
 ]
 
 # Extract values for plotting
@@ -57,12 +59,16 @@ r2_y = [data[1] for data in r2_data]
 # Create figure exactly like paper style
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(19, 7), gridspec_kw={'width_ratios': [1, 1]})
 
-# Colors - emerald green for full model, red for temporal contrastive, grays for others
+# Colors - emerald green for full model, blue for temporal contrastive, orange for untrained, grays for others
 full_color = '#27ae60'
-temporal_contrastive_color = '#e74c3c'  # Red to highlight poor performance
-pallette_greys = sns.color_palette('Greys', len(models) + 2)[2:]
+temporal_contrastive_color = "#3c45e7ff"  # Blue for temporal contrastive
+supervised_color = "#23a59fff"  # Teal for supervised
+untrained_color = "#ff6b35"  # Orange for untrained baseline
+pallette_greys = sns.color_palette('Greys', len(models) + 3)[3:]
 pallette_greys[0] = full_color
-pallette_greys[-1] = temporal_contrastive_color  # Last color for temporal contrastive
+pallette_greys[-1] = untrained_color  # Last color for untrained
+pallette_greys[-2] = temporal_contrastive_color  # Second last for temporal contrastive
+pallette_greys[-3] = supervised_color  # Third last for supervised
 
 # Plot 1: Energy Efficiency Loss with error bars
 bars1 = ax1.bar(range(len(models)), test_losses,
