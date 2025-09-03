@@ -19,10 +19,12 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy.interpolate import griddata
 from scipy.optimize import curve_fit
+from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, mutual_info_score
 from sklearn.decomposition import PCA
+from sklearn.feature_selection import mutual_info_regression
 import pandas as pd
 import os
 import pickle
@@ -114,6 +116,291 @@ def analyze_continuous_xy_tuning(net, dataset, allocentric_units, output_dir='./
     return unit_activations, xy_coords
 
 
+def plot_spatial_receptive_fields(unit_activations, xy_coords, allocentric_units, 
+                                  n_units=9, output_dir='./results'):
+    """
+    Plot simple spatial receptive fields for top units - basic visualization first.
+    """
+    print(f"Creating spatial receptive field plots for {n_units} units...")
+    
+    # Select units to visualize
+    unit_indices = np.linspace(0, len(allocentric_units)-1, n_units).astype(int)
+    
+    fig, axes = plt.subplots(3, 3, figsize=(12, 12))
+    axes = axes.flatten()
+    
+    for i, unit_idx in enumerate(unit_indices):
+        # Simple scatter plot - let the data speak first
+        scatter = axes[i].scatter(xy_coords[:, 0], xy_coords[:, 1], 
+                                c=unit_activations[:, unit_idx], 
+                                cmap='viridis', alpha=0.6, s=1)
+        
+        axes[i].set_xlabel('X coordinate')
+        axes[i].set_ylabel('Y coordinate')
+        axes[i].set_title(f'Unit {allocentric_units[unit_idx]}')
+        plt.colorbar(scatter, ax=axes[i], shrink=0.8)
+    
+    plt.tight_layout()
+    
+    # Save figure
+    os.makedirs(output_dir, exist_ok=True)
+    fig.savefig(os.path.join(output_dir, 'spatial_receptive_fields.png'), 
+                dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(output_dir, 'spatial_receptive_fields.svg'), 
+                bbox_inches='tight')
+    
+    return fig
+
+
+def analyze_coordinate_systems(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
+    """
+    Test different coordinate system representations.
+    """
+    print("Analyzing coordinate system preferences...")
+    
+    # Convert to different coordinate systems
+    x, y = xy_coords[:, 0], xy_coords[:, 1]
+    
+    # Cartesian (already have)
+    cartesian = np.column_stack([x, y])
+    
+    # Polar coordinates
+    r = np.sqrt(x**2 + y**2)  # Distance from origin
+    theta = np.arctan2(y, x)  # Angle
+    polar = np.column_stack([r, theta])
+    
+    # Log-polar (common in vision)
+    log_r = np.log(r + 1e-6)  # Add small epsilon to avoid log(0)
+    log_polar = np.column_stack([log_r, theta])
+    
+    coordinate_systems = {
+        'Cartesian (x,y)': cartesian,
+        'Polar (r,θ)': polar, 
+        'Log-polar (log(r),θ)': log_polar
+    }
+    
+    # Test which coordinate system each unit prefers
+    results = []
+    
+    for unit_idx in range(unit_activations.shape[1]):
+        activations = unit_activations[:, unit_idx]
+        
+        unit_results = {'unit_index': allocentric_units[unit_idx]}
+        
+        for coord_name, coords in coordinate_systems.items():
+            # Compute mutual information with each coordinate
+            mi_coord1 = mutual_info_regression(coords[:, [0]], activations)[0]
+            mi_coord2 = mutual_info_regression(coords[:, [1]], activations)[0]
+            
+            unit_results[f'{coord_name}_coord1_MI'] = mi_coord1
+            unit_results[f'{coord_name}_coord2_MI'] = mi_coord2
+            unit_results[f'{coord_name}_total_MI'] = mi_coord1 + mi_coord2
+        
+        results.append(unit_results)
+    
+    results_df = pd.DataFrame(results)
+    
+    # Find best coordinate system for each unit
+    coord_cols = [col for col in results_df.columns if 'total_MI' in col]
+    results_df['best_coordinate_system'] = results_df[coord_cols].idxmax(axis=1)
+    results_df['best_coordinate_system'] = results_df['best_coordinate_system'].str.replace('_total_MI', '')
+    
+    # Summary statistics
+    coord_preferences = results_df['best_coordinate_system'].value_counts()
+    
+    # Visualize coordinate system preferences
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Bar plot of coordinate system preferences
+    coord_preferences.plot(kind='bar', ax=ax1)
+    ax1.set_title('Coordinate System Preferences')
+    ax1.set_xlabel('Coordinate System')
+    ax1.set_ylabel('Number of Units')
+    ax1.tick_params(axis='x', rotation=45)
+    
+    # Heatmap of mutual information
+    mi_matrix = results_df[[col for col in results_df.columns if 'total_MI' in col]].values
+    im = ax2.imshow(mi_matrix.T, aspect='auto', cmap='viridis')
+    ax2.set_title('Mutual Information with Coordinate Systems')
+    ax2.set_xlabel('Unit Index')
+    ax2.set_ylabel('Coordinate System')
+    ax2.set_yticks(range(len(coord_cols)))
+    ax2.set_yticklabels([col.replace('_total_MI', '') for col in coord_cols])
+    plt.colorbar(im, ax=ax2, shrink=0.8)
+    
+    plt.tight_layout()
+    
+    # Save results
+    fig.savefig(os.path.join(output_dir, 'coordinate_system_analysis.png'), 
+                dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(output_dir, 'coordinate_system_analysis.svg'), 
+                bbox_inches='tight')
+    
+    results_df.to_csv(os.path.join(output_dir, 'coordinate_system_preferences.csv'), index=False)
+    
+    print(f"Coordinate system preferences:")
+    for coord_sys, count in coord_preferences.items():
+        print(f"  {coord_sys}: {count} units ({count/len(results_df)*100:.1f}%)")
+    
+    return results_df, fig
+
+
+def compute_spatial_information(unit_activations, xy_coords, allocentric_units, 
+                               n_spatial_bins=20, output_dir='./results'):
+    """
+    Compute spatial information content for each unit.
+    """
+    print("Computing spatial information content...")
+    
+    # Discretize space for information calculation
+    x_bins = np.linspace(xy_coords[:, 0].min(), xy_coords[:, 0].max(), n_spatial_bins)
+    y_bins = np.linspace(xy_coords[:, 1].min(), xy_coords[:, 1].max(), n_spatial_bins)
+    
+    # Assign each sample to spatial bin
+    x_bin_indices = np.digitize(xy_coords[:, 0], x_bins) - 1
+    y_bin_indices = np.digitize(xy_coords[:, 1], y_bins) - 1
+    
+    # Combined spatial bin index
+    spatial_bins = x_bin_indices * n_spatial_bins + y_bin_indices
+    
+    # Keep only valid bins
+    valid_mask = (x_bin_indices >= 0) & (x_bin_indices < n_spatial_bins) & \
+                 (y_bin_indices >= 0) & (y_bin_indices < n_spatial_bins)
+    
+    spatial_bins = spatial_bins[valid_mask]
+    unit_activations_valid = unit_activations[valid_mask]
+    xy_coords_valid = xy_coords[valid_mask]
+    
+    # Compute information metrics for each unit
+    info_results = []
+    
+    for unit_idx in range(unit_activations_valid.shape[1]):
+        activations = unit_activations_valid[:, unit_idx]
+        
+        # Mutual information with spatial position
+        spatial_mi = mutual_info_regression(spatial_bins.reshape(-1, 1), activations)[0]
+        
+        # Mutual information with x and y separately
+        x_mi = mutual_info_regression(xy_coords_valid[:, [0]], activations)[0]
+        y_mi = mutual_info_regression(xy_coords_valid[:, [1]], activations)[0]
+        
+        # Spatial information rate (bits per spike, classic measure)
+        # Based on Skaggs et al. 1993
+        mean_rate = np.mean(activations)
+        spatial_info = 0
+        
+        if mean_rate > 0:
+            for bin_idx in range(n_spatial_bins * n_spatial_bins):
+                bin_mask = spatial_bins == bin_idx
+                if np.sum(bin_mask) > 5:  # Minimum samples per bin
+                    bin_rate = np.mean(activations[bin_mask])
+                    bin_occupancy = np.sum(bin_mask) / len(spatial_bins)
+                    if bin_rate > 0:
+                        spatial_info += bin_occupancy * bin_rate * np.log2(bin_rate / mean_rate)
+        
+        spatial_info /= mean_rate if mean_rate > 0 else 1
+        
+        # Spatial coherence (correlation between neighboring bins)
+        spatial_coherence = compute_spatial_coherence(activations, spatial_bins, n_spatial_bins)
+        
+        info_results.append({
+            'unit_index': allocentric_units[unit_idx],
+            'spatial_MI': spatial_mi,
+            'x_MI': x_mi,
+            'y_MI': y_mi,
+            'spatial_information_rate': spatial_info,
+            'spatial_coherence': spatial_coherence,
+            'mean_firing_rate': mean_rate,
+            'x_y_MI_ratio': x_mi / (y_mi + 1e-10)  # Preference for x vs y
+        })
+    
+    info_df = pd.DataFrame(info_results)
+    
+    # Visualize spatial information
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Spatial information distribution
+    axes[0, 0].hist(info_df['spatial_information_rate'], bins=20, alpha=0.7)
+    axes[0, 0].set_xlabel('Spatial Information Rate (bits/spike)')
+    axes[0, 0].set_ylabel('Number of Units')
+    axes[0, 0].set_title('Distribution of Spatial Information')
+    
+    # X vs Y mutual information
+    axes[0, 1].scatter(info_df['x_MI'], info_df['y_MI'], alpha=0.7)
+    axes[0, 1].plot([0, info_df[['x_MI', 'y_MI']].max().max()], 
+                    [0, info_df[['x_MI', 'y_MI']].max().max()], 'k--', alpha=0.5)
+    axes[0, 1].set_xlabel('X Mutual Information')
+    axes[0, 1].set_ylabel('Y Mutual Information')
+    axes[0, 1].set_title('X vs Y Coding Preferences')
+    
+    # Information vs firing rate
+    axes[1, 0].scatter(info_df['mean_firing_rate'], info_df['spatial_information_rate'], alpha=0.7)
+    axes[1, 0].set_xlabel('Mean Firing Rate')
+    axes[1, 0].set_ylabel('Spatial Information Rate')
+    axes[1, 0].set_title('Information vs Firing Rate')
+    
+    # Spatial coherence distribution  
+    axes[1, 1].hist(info_df['spatial_coherence'], bins=20, alpha=0.7)
+    axes[1, 1].set_xlabel('Spatial Coherence')
+    axes[1, 1].set_ylabel('Number of Units')
+    axes[1, 1].set_title('Spatial Coherence Distribution')
+    
+    plt.tight_layout()
+    
+    # Save results
+    fig.savefig(os.path.join(output_dir, 'spatial_information_analysis.png'), 
+                dpi=300, bbox_inches='tight')
+    fig.savefig(os.path.join(output_dir, 'spatial_information_analysis.svg'), 
+                bbox_inches='tight')
+    
+    info_df.to_csv(os.path.join(output_dir, 'spatial_information_metrics.csv'), index=False)
+    
+    # Print summary statistics
+    print(f"\nSpatial Information Summary:")
+    print(f"Mean spatial information: {info_df['spatial_information_rate'].mean():.3f} ± {info_df['spatial_information_rate'].std():.3f} bits/spike")
+    print(f"Units with high spatial info (>1 bit/spike): {(info_df['spatial_information_rate'] > 1).sum()}")
+    print(f"Mean spatial coherence: {info_df['spatial_coherence'].mean():.3f}")
+    print(f"X-preferring units (X MI > Y MI): {(info_df['x_MI'] > info_df['y_MI']).sum()}")
+    print(f"Y-preferring units (Y MI > X MI): {(info_df['y_MI'] > info_df['x_MI']).sum()}")
+    
+    return info_df, fig
+
+
+def compute_spatial_coherence(activations, spatial_bins, n_spatial_bins):
+    """
+    Compute spatial coherence - how smooth the spatial tuning is.
+    """
+    # Create 2D rate map
+    rate_map = np.zeros((n_spatial_bins, n_spatial_bins))
+    count_map = np.zeros((n_spatial_bins, n_spatial_bins))
+    
+    for i in range(len(spatial_bins)):
+        if 0 <= spatial_bins[i] < n_spatial_bins * n_spatial_bins:
+            row = spatial_bins[i] // n_spatial_bins
+            col = spatial_bins[i] % n_spatial_bins
+            if 0 <= row < n_spatial_bins and 0 <= col < n_spatial_bins:
+                rate_map[row, col] += activations[i]
+                count_map[row, col] += 1
+    
+    # Average rates
+    rate_map = np.divide(rate_map, count_map, out=np.zeros_like(rate_map), where=count_map!=0)
+    
+    # Compute correlations with neighboring bins
+    coherences = []
+    for i in range(1, n_spatial_bins-1):
+        for j in range(1, n_spatial_bins-1):
+            center_rate = rate_map[i, j]
+            neighbor_rates = [
+                rate_map[i-1, j], rate_map[i+1, j], 
+                rate_map[i, j-1], rate_map[i, j+1]
+            ]
+            neighbor_rates = [r for r in neighbor_rates if r > 0]
+            if len(neighbor_rates) > 0:
+                coherences.append(np.corrcoef([center_rate] + neighbor_rates)[0, 1:].mean())
+    
+    return np.mean(coherences) if coherences else 0
+
+
 def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units, 
                                unit_indices=None, grid_resolution=100, 
                                output_dir='./results'):
@@ -188,185 +475,86 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
     return fig
 
 
-def characterize_tuning_profiles(unit_activations, xy_coords):
+def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
     """
-    Characterize each unit's 2D tuning with interpretable features.
-    
-    Args:
-        unit_activations: (n_samples, n_units) unit activations
-        xy_coords: (n_samples, 2) x,y coordinates
-        
-    Returns:
-        features: (n_units, n_features) array of tuning characteristics
-        feature_names: List of feature names
+    Simple clustering analysis based on spatial tuning properties.
     """
-    print(f"Characterizing tuning profiles for {unit_activations.shape[1]} units...")
+    print("Performing simple clustering analysis...")
     
+    # Just use basic spatial features for clustering
     features = []
-    feature_names = [
-        'max_activation', 'mean_activation', 'std_activation',
-        'center_of_mass_x', 'center_of_mass_y', 
-        'spatial_spread_x', 'spatial_spread_y',
-        'x_correlation', 'y_correlation',
-        'quadrant_1', 'quadrant_2', 'quadrant_3', 'quadrant_4',
-        'x_gradient_strength', 'y_gradient_strength',
-        'spatial_selectivity_index'
-    ]
-    
     for unit_idx in range(unit_activations.shape[1]):
         activations = unit_activations[:, unit_idx]
         
-        # Basic statistics
-        max_activation = np.max(activations)
-        mean_activation = np.mean(activations)
-        std_activation = np.std(activations)
+        # Simple features: center of mass and correlations
+        com_x = np.average(xy_coords[:, 0], weights=activations + 1e-10)
+        com_y = np.average(xy_coords[:, 1], weights=activations + 1e-10)
         
-        # Avoid division by zero for center of mass calculation
-        if np.sum(activations) == 0:
-            activations = activations + 1e-10
-            
-        # Spatial properties - Center of mass
-        com_x = np.average(xy_coords[:, 0], weights=activations)
-        com_y = np.average(xy_coords[:, 1], weights=activations)
-        
-        # Spatial spread (weighted standard deviation)
-        spread_x = np.sqrt(np.average((xy_coords[:, 0] - com_x)**2, weights=activations))
-        spread_y = np.sqrt(np.average((xy_coords[:, 1] - com_y)**2, weights=activations))
-        
-        # Correlation with spatial coordinates
         x_corr = np.corrcoef(xy_coords[:, 0], activations)[0, 1] if len(np.unique(activations)) > 1 else 0
         y_corr = np.corrcoef(xy_coords[:, 1], activations)[0, 1] if len(np.unique(activations)) > 1 else 0
         
-        # Replace NaN correlations with 0
         x_corr = 0 if np.isnan(x_corr) else x_corr
         y_corr = 0 if np.isnan(y_corr) else y_corr
         
-        # Quadrant preferences
-        q1_mask = (xy_coords[:, 0] > com_x) & (xy_coords[:, 1] > com_y)
-        q2_mask = (xy_coords[:, 0] < com_x) & (xy_coords[:, 1] > com_y)
-        q3_mask = (xy_coords[:, 0] < com_x) & (xy_coords[:, 1] < com_y)
-        q4_mask = (xy_coords[:, 0] > com_x) & (xy_coords[:, 1] < com_y)
-        
-        q1 = np.mean(activations[q1_mask]) if np.any(q1_mask) else 0
-        q2 = np.mean(activations[q2_mask]) if np.any(q2_mask) else 0
-        q3 = np.mean(activations[q3_mask]) if np.any(q3_mask) else 0
-        q4 = np.mean(activations[q4_mask]) if np.any(q4_mask) else 0
-        
-        # Gradient strength (linear relationship with coordinates)
-        x_gradient_strength = abs(x_corr)
-        y_gradient_strength = abs(y_corr)
-        
-        # Spatial selectivity index (how concentrated the tuning is)
-        spatial_selectivity = (max_activation - mean_activation) / (max_activation + mean_activation + 1e-10)
-        
-        features.append([
-            max_activation, mean_activation, std_activation,
-            com_x, com_y, spread_x, spread_y,
-            x_corr, y_corr, q1, q2, q3, q4,
-            x_gradient_strength, y_gradient_strength,
-            spatial_selectivity
-        ])
+        features.append([com_x, com_y, x_corr, y_corr])
     
     features_array = np.array(features)
+    features_array = np.nan_to_num(features_array)
     
-    # Handle any remaining NaN values
-    features_array = np.nan_to_num(features_array, nan=0.0, posinf=0.0, neginf=0.0)
+    # Simple PCA visualization
+    pca = PCA(n_components=2)
+    features_pca = pca.fit_transform(StandardScaler().fit_transform(features_array))
     
-    print(f"Feature matrix shape: {features_array.shape}")
-    return features_array, feature_names
-
-
-def cluster_by_tuning_properties(tuning_features, feature_names, output_dir='./results'):
-    """
-    Cluster units based on their 2D tuning characteristics.
-    
-    Args:
-        tuning_features: (n_units, n_features) array of tuning characteristics
-        feature_names: List of feature names
-        output_dir: Directory to save results
-        
-    Returns:
-        cluster_labels: Cluster assignment for each unit
-        optimal_k: Optimal number of clusters
-        scaler: Fitted StandardScaler
-        pca: Fitted PCA model
-    """
-    print("Clustering units by tuning properties...")
-    
-    # Standardize features
-    scaler = StandardScaler()
-    features_scaled = scaler.fit_transform(tuning_features)
-    
-    # PCA for dimensionality reduction
-    pca = PCA(n_components=min(10, features_scaled.shape[1]))
-    features_pca = pca.fit_transform(features_scaled)
-    
-    # Find optimal number of clusters
-    k_range = range(2, min(10, len(tuning_features) // 2))
+    # Simple k-means clustering
     silhouette_scores = []
-    inertias = []
+    k_range = range(2, min(8, len(allocentric_units) // 3))
     
     for k in k_range:
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
         labels = kmeans.fit_predict(features_pca)
-        score = silhouette_score(features_pca, labels)
-        silhouette_scores.append(score)
-        inertias.append(kmeans.inertia_)
+        if len(set(labels)) > 1:  # Need at least 2 clusters for silhouette score
+            score = silhouette_score(features_pca, labels)
+            silhouette_scores.append(score)
+        else:
+            silhouette_scores.append(0)
     
-    optimal_k = k_range[np.argmax(silhouette_scores)]
+    if silhouette_scores:
+        optimal_k = k_range[np.argmax(silhouette_scores)]
+        kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(features_pca)
+    else:
+        optimal_k = 2
+        cluster_labels = np.zeros(len(allocentric_units))
     
-    # Final clustering
-    kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-    cluster_labels = kmeans.fit_predict(features_pca)
+    # Simple visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     
-    print(f"Optimal number of clusters: {optimal_k}")
-    print(f"Best silhouette score: {max(silhouette_scores):.3f}")
+    # PCA plot with clusters
+    scatter = ax1.scatter(features_pca[:, 0], features_pca[:, 1], 
+                         c=cluster_labels, cmap='tab10', alpha=0.7)
+    ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
+    ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
+    ax1.set_title('Unit Clustering (PCA space)')
     
-    # Visualize clustering results
-    fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    
-    # Silhouette scores
-    axes[0,0].plot(k_range, silhouette_scores, 'bo-')
-    axes[0,0].axvline(optimal_k, color='r', linestyle='--', alpha=0.7)
-    axes[0,0].set_xlabel('Number of clusters')
-    axes[0,0].set_ylabel('Silhouette score')
-    axes[0,0].set_title('Cluster validation')
-    axes[0,0].grid(True, alpha=0.3)
-    
-    # PCA visualization
-    scatter = axes[0,1].scatter(features_pca[:, 0], features_pca[:, 1], 
-                               c=cluster_labels, cmap='tab10', alpha=0.7)
-    axes[0,1].set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
-    axes[0,1].set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
-    axes[0,1].set_title('Clusters in PCA space')
-    plt.colorbar(scatter, ax=axes[0,1])
-    
-    # Feature importance (PCA loadings)
-    pc1_loadings = pca.components_[0]
-    pc2_loadings = pca.components_[1]
-    
-    axes[1,0].barh(range(len(feature_names)), pc1_loadings)
-    axes[1,0].set_yticks(range(len(feature_names)))
-    axes[1,0].set_yticklabels(feature_names, fontsize=8)
-    axes[1,0].set_xlabel('PC1 loading')
-    axes[1,0].set_title('Feature contributions to PC1')
-    
-    axes[1,1].barh(range(len(feature_names)), pc2_loadings)
-    axes[1,1].set_yticks(range(len(feature_names)))
-    axes[1,1].set_yticklabels(feature_names, fontsize=8)
-    axes[1,1].set_xlabel('PC2 loading')
-    axes[1,1].set_title('Feature contributions to PC2')
+    # Feature space (x vs y correlation)
+    scatter2 = ax2.scatter(features_array[:, 2], features_array[:, 3], 
+                          c=cluster_labels, cmap='tab10', alpha=0.7)
+    ax2.set_xlabel('X Correlation')
+    ax2.set_ylabel('Y Correlation')
+    ax2.set_title('X vs Y Correlation Preferences')
+    ax2.axhline(0, color='k', linestyle='--', alpha=0.3)
+    ax2.axvline(0, color='k', linestyle='--', alpha=0.3)
     
     plt.tight_layout()
     
-    # Save clustering analysis
-    os.makedirs(output_dir, exist_ok=True)
-    fig.savefig(os.path.join(output_dir, 'clustering_analysis.png'), 
+    # Save
+    fig.savefig(os.path.join(output_dir, 'simple_clustering.png'), 
                 dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'clustering_analysis.svg'), 
+    fig.savefig(os.path.join(output_dir, 'simple_clustering.svg'), 
                 bbox_inches='tight')
     
-    return cluster_labels, optimal_k, scaler, pca
+    print(f"Found {optimal_k} clusters")
+    return cluster_labels, optimal_k, fig
 
 
 def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units, 
@@ -501,56 +689,80 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         trained_net, validation_set, top_xy_units, output_dir=output_dir
     )
     
-    # 3. Visualize 2D tuning curves
-    print("\n3. Creating 2D tuning curve visualizations...")
-    fig_tuning = visualize_2d_tuning_curves(
+    # 3. Simple spatial receptive fields visualization (exploratory)
+    print("\n3. Plotting spatial receptive fields...")
+    fig_receptive = plot_spatial_receptive_fields(
         unit_activations, xy_coords, top_xy_units, output_dir=output_dir
     )
     
-    # 4. Characterize and cluster tuning profiles
-    print("\n4. Characterizing tuning profiles...")
-    tuning_features, feature_names = characterize_tuning_profiles(
-        unit_activations, xy_coords
+    # 4. Coordinate system analysis
+    print("\n4. Analyzing coordinate system preferences...")
+    coord_results, fig_coord = analyze_coordinate_systems(
+        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
     )
     
-    print("\n5. Clustering analysis...")
-    cluster_labels, optimal_k, scaler, pca = cluster_by_tuning_properties(
-        tuning_features, feature_names, output_dir=output_dir
+    # 5. Spatial information quantification
+    print("\n5. Computing spatial information metrics...")
+    info_results, fig_info = compute_spatial_information(
+        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
     )
     
-    # 6. Visualize cluster representatives
-    print("\n6. Visualizing cluster representatives...")
+    # 6. Detailed 2D tuning curve heatmaps (fewer units)
+    print("\n6. Creating detailed 2D tuning curve heatmaps...")
+    fig_tuning = visualize_2d_tuning_curves(
+        unit_activations, xy_coords, top_xy_units, 
+        unit_indices=list(range(min(16, len(top_xy_units)))), output_dir=output_dir
+    )
+    
+    # 7. Simple clustering analysis
+    print("\n7. Simple clustering analysis...")
+    cluster_labels, optimal_k, fig_clustering = simple_clustering_analysis(
+        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
+    )
+    
+    # 8. Visualize cluster representatives (simplified)
+    print("\n8. Visualizing cluster representatives...")
     fig_clusters = visualize_clusters_by_tuning(
         unit_activations, xy_coords, top_xy_units, cluster_labels, output_dir=output_dir
     )
     
-    # 7. Save detailed results
-    print("\n7. Saving detailed results...")
+    # 9. Save comprehensive results
+    print("\n9. Saving comprehensive results...")
     
-    # Create summary DataFrame
+    # Combine all results into summary DataFrames
+    # Main results DataFrame combining spatial info and coordinate preferences
     results_df = pd.DataFrame({
         'unit_index': top_xy_units,
-        'cluster': cluster_labels,
-        **{name: tuning_features[:, i] for i, name in enumerate(feature_names)}
+        'cluster': cluster_labels
     })
     
-    results_df.to_csv(os.path.join(output_dir, 'allocentric_units_analysis.csv'), index=False)
+    # Add spatial information metrics
+    results_df = results_df.merge(
+        info_results[['unit_index', 'spatial_MI', 'x_MI', 'y_MI', 'spatial_information_rate', 
+                     'spatial_coherence', 'mean_firing_rate', 'x_y_MI_ratio']], 
+        on='unit_index', how='left'
+    )
     
-    # Save cluster summary
+    # Add coordinate system preferences
+    coord_summary = coord_results[['unit_index', 'best_coordinate_system']].copy()
+    results_df = results_df.merge(coord_summary, on='unit_index', how='left')
+    
+    results_df.to_csv(os.path.join(output_dir, 'allocentric_units_comprehensive_analysis.csv'), index=False)
+    
+    # Simple cluster summary
     cluster_summary = []
     for cluster_id in range(optimal_k):
         cluster_mask = cluster_labels == cluster_id
-        cluster_size = np.sum(cluster_mask)
-        cluster_features = tuning_features[cluster_mask]
+        cluster_units = results_df[cluster_mask]
         
         cluster_summary.append({
             'cluster_id': cluster_id,
-            'size': cluster_size,
-            'mean_x_corr': np.mean(cluster_features[:, feature_names.index('x_correlation')]),
-            'mean_y_corr': np.mean(cluster_features[:, feature_names.index('y_correlation')]),
-            'mean_selectivity': np.mean(cluster_features[:, feature_names.index('spatial_selectivity_index')]),
-            'mean_spread_x': np.mean(cluster_features[:, feature_names.index('spatial_spread_x')]),
-            'mean_spread_y': np.mean(cluster_features[:, feature_names.index('spatial_spread_y')])
+            'size': len(cluster_units),
+            'mean_spatial_info': cluster_units['spatial_information_rate'].mean(),
+            'mean_x_MI': cluster_units['x_MI'].mean(),
+            'mean_y_MI': cluster_units['y_MI'].mean(),
+            'dominant_coord_system': cluster_units['best_coordinate_system'].mode().iloc[0] if len(cluster_units) > 0 else 'unknown',
+            'mean_coherence': cluster_units['spatial_coherence'].mean()
         })
     
     cluster_summary_df = pd.DataFrame(cluster_summary)
@@ -561,16 +773,14 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         'allocentric_units': top_xy_units,
         'activations': unit_activations,
         'coordinates': xy_coords,
-        'tuning_features': tuning_features,
-        'feature_names': feature_names,
         'clusters': cluster_labels,
         'n_clusters': optimal_k,
         'decoding_score': test_score,
         'regression_weights': reg_weights,
         'pred_cells': pred_cells,
-        'scaler': scaler,
-        'pca': pca,
-        'results_df': results_df,
+        'spatial_information': info_results,
+        'coordinate_preferences': coord_results,
+        'comprehensive_results': results_df,
         'cluster_summary': cluster_summary_df
     }
     
@@ -581,7 +791,16 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     # Print cluster summary
     print("\nCluster Summary:")
-    print(cluster_summary_df.round(3))
+    for _, row in cluster_summary_df.iterrows():
+        print(f"  Cluster {row['cluster_id']}: {row['size']} units, "
+              f"info={row['mean_spatial_info']:.2f} bits/spike, "
+              f"coord_sys={row['dominant_coord_system']}")
+    
+    # Print coordinate system summary
+    coord_prefs = coord_results['best_coordinate_system'].value_counts()
+    print(f"\nOverall Coordinate System Preferences:")
+    for coord_sys, count in coord_prefs.items():
+        print(f"  {coord_sys}: {count} units ({count/len(coord_results)*100:.1f}%)")
     
     return results
 
@@ -668,10 +887,15 @@ def main():
         print("="*60)
         print(f"Results saved to: {args.output_dir}")
         print("\nGenerated files:")
-        print("- allocentric_tuning_curves.png/svg: 2D tuning curve heatmaps")
-        print("- clustering_analysis.png/svg: Clustering validation and PCA")  
+        print("- spatial_receptive_fields.png/svg: Basic scatter plots of unit responses")
+        print("- coordinate_system_analysis.png/svg: Cartesian vs polar vs log-polar preferences") 
+        print("- spatial_information_analysis.png/svg: Information content and x/y selectivity")
+        print("- allocentric_tuning_curves.png/svg: Detailed 2D tuning curve heatmaps")
+        print("- simple_clustering.png/svg: PCA and correlation-based clustering")
         print("- cluster_representatives.png/svg: Representative units for each cluster")
-        print("- allocentric_units_analysis.csv: Detailed unit characteristics")
+        print("- allocentric_units_comprehensive_analysis.csv: Complete unit characteristics")
+        print("- spatial_information_metrics.csv: Information-theoretic measures")
+        print("- coordinate_system_preferences.csv: Coordinate system analysis")
         print("- cluster_summary.csv: Summary statistics for each cluster")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
