@@ -69,7 +69,7 @@ def regressionCoordinates(net:ModelState, train_set:Dataset, test_set:Dataset, l
     norm_factors = np.mean(X_train, axis=0)
     norm_factors += np.ones_like(norm_factors) * 0.000001
     X_train = X_train / norm_factors
-    reg = LinearRegression().fit(X_train, Y_train, 2)
+    reg = LinearRegression().fit(X_train, Y_train, 2, n_jobs=-1)
     # print("regression fitted")
     # print(f"Training score layer {layer_idx}: {reg.score(X_train, Y_train)}")
     print(f"Training score: {reg.score(X_train, Y_train)}")
@@ -88,17 +88,17 @@ def regressionCoordinates(net:ModelState, train_set:Dataset, test_set:Dataset, l
     s_tot = np.sum(np.square(Y_test - target_mean), axis=0)
     r_squared = np.ones((1, 2)) - np.divide(s_res, s_tot)
     print(f"R squared: {r_squared}")
-    F_PATH = 'EmergentPredictiveCoding/Results/Fig2_mscoco/'
-    df = pd.DataFrame(np.concatenate((pred_Y, Y_test), axis=1), columns=['x_pred', 'y_pred', 'x_target', 'y_target'])
-    df.to_csv(F_PATH+"decoder_preds.csv")
+    # F_PATH = 'EmergentPredictiveCoding/Results/Fig2_mscoco/'
+    # df = pd.DataFrame(np.concatenate((pred_Y, Y_test), axis=1), columns=['x_pred', 'y_pred', 'x_target', 'y_target'])
+    # df.to_csv(F_PATH+"decoder_preds.csv")
 
-    torch.manual_seed(2553)
-    example_activations, example_fix = getFeatures(net, test_set, layer_idx=layer, timestep=timestep, index=1842)
-    example_activations = example_activations / norm_factors
-    example_pred = reg.predict(example_activations)
-    F_PATH = 'EmergentPredictiveCoding/Results/Fig2_mscoco/'
-    df = pd.DataFrame(np.concatenate((example_pred, example_fix), axis=1), columns=['x_pred', 'y_pred', 'x_target', 'y_target'])
-    df.to_csv(F_PATH+"example_preds.csv")
+    # torch.manual_seed(2553)
+    # example_activations, example_fix = getFeatures(net, test_set, layer_idx=layer, timestep=timestep, index=1842)
+    # example_activations = example_activations / norm_factors
+    # example_pred = reg.predict(example_activations)
+    # F_PATH = 'EmergentPredictiveCoding/Results/Fig2_mscoco/'
+    # df = pd.DataFrame(np.concatenate((example_pred, example_fix), axis=1), columns=['x_pred', 'y_pred', 'x_target', 'y_target'])
+    # df.to_csv(F_PATH+"example_preds.csv")
 
     reg_weights = reg.coef_
     pred_units = np.argsort(np.abs(reg_weights), axis=1)

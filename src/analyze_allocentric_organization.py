@@ -808,12 +808,13 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
 def main():
     parser = argparse.ArgumentParser(description='Analyze allocentric coding unit spatial organization')
     parser.add_argument('--model_path', type=str, required=True,
-                        help='Full path to trained model (e.g. /share/klab/psulewski/tnortmann/efficient-remapping/EmergentPredictiveCoding/models/patterns_rev/mscoco_deepgaze3/mscoco_netl1_all_0_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_)')
+                        help='Full path to trained model (e.g. patterns_rev/mscoco_deepgaze3/mscoco_netl1_all_0_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_)')
+    
     parser.add_argument('--dataset_path', type=str, 
                         default='/share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5',
                         help='Path to dataset')
     parser.add_argument('--output_dir', type=str, 
-                        default='/share/klab/psulewski/psulewski/EfficientRemapping/models/temporal_contrastive/allocentric_analysis',
+                        default='/share/klab/psulewski/psulewski/EfficientRemapping/allocentric_analysis',
                         help='Directory to save results (default: alongside temporal contrastive results)')
     parser.add_argument('--device', type=str, default=None,
                         help='Device to use (cuda/cpu), auto-detect if not specified')
@@ -840,6 +841,8 @@ def main():
     
     # Load trained model
     print(f"Loading energy-efficient model from {args.model_path}")
+    print(args.model_path)
+    model_title = args.model_path.rstrip("_").split("/")[-1]
     
     # Initialize and load model (parameters matching your energy-efficient model)
     net = RNN.State(
@@ -864,7 +867,7 @@ def main():
     
     # Load model weights
     try:
-        net.load(args.model_instance, twolayers=True)
+        net.load(twolayers=True)
         net.model.eval()
         print("Energy-efficient model loaded successfully!")
     except Exception as e:
