@@ -25,8 +25,8 @@ loss_data = [
     (0.1335439, 0.1325247788863055, 0.13456300850344974),   # 1 hidden layer
     (0.12374754, 0.12280473117477891, 0.12469035382621291), # 3 hidden layers
     (0.3195281, 0.3182375727972682, 0.3208186329522435),    # supervised (epoch 100)
-    (0.423138, 0.420405, 0.425870),  # temporal contrastive - NEW RESULTS
-    (0, 0, 0)  # untrained baseline (no loss data)
+    (0.542402, 0.538847, 0.545956),  # temporal contrastive (epoch 150)
+    (0.414143, 0.411396, 0.416889)   # untrained baseline
 ]
 
 # R² data: [x_coordinate, y_coordinate] - Global decoding results
@@ -37,8 +37,8 @@ r2_data = [
     [0.79468732, 0.80130765],  # 1 hidden layer
     [0.94286285, 0.95643485],  # 3 hidden layers
     [0.48640877, 0.55557019],  # supervised (epoch 100)
-    [0.47562987, 0.50586957],  # temporal contrastive - UPDATED GLOBAL RESULTS (Test R²: 0.490693)
-    [0.47897762, 0.48458517]   # untrained baseline - GLOBAL RESULTS (Test R²: 0.481723)
+    [0.456348, 0.499144],     # temporal contrastive (epoch 150)
+    [0.478978, 0.484585]      # untrained baseline - 
 ]
 
 # Extract values for plotting
@@ -59,11 +59,11 @@ r2_y = [data[1] for data in r2_data]
 # Create figure exactly like paper style
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(19, 7), gridspec_kw={'width_ratios': [1, 1]})
 
-# Colors - emerald green for full model, blue for temporal contrastive, orange for untrained, grays for others
+# Colors - emerald green for full model, red for poor temporal contrastive, orange for untrained, grays for others
 full_color = '#27ae60'
-temporal_contrastive_color = "#3c45e7ff"  # Blue for temporal contrastive
+temporal_contrastive_color = "#643ce7"  # Red for poor temporal contrastive performance
 supervised_color = "#23a59fff"  # Teal for supervised
-untrained_color = "#ff6b35"  # Orange for untrained baseline
+untrained_color = "#f39c12"  # Orange for untrained baseline
 pallette_greys = sns.color_palette('Greys', len(models) + 3)[3:]
 pallette_greys[0] = full_color
 pallette_greys[-1] = untrained_color  # Last color for untrained
@@ -79,7 +79,7 @@ ax1.set_ylabel('energy efficiency\n[loss]')
 ax1.set_title('B model results', fontweight='bold', loc='left')
 ax1.set_xticks(range(len(models)))
 ax1.set_xticklabels(models, rotation=45, ha='right')
-ax1.set_ylim(0, 0.45)  # Adjusted to accommodate temporal contrastive results
+ax1.set_ylim(0, 0.60)  # Adjusted to accommodate higher temporal contrastive loss
 
 # Add full model reference line
 full_model_loss = test_losses[0]
@@ -145,10 +145,12 @@ plt.savefig(os.path.join(output_dir, fname.replace('.svg', '.png')),
            format='png', dpi=300, bbox_inches='tight')
 
 print("Figure saved successfully!")
-print("\nTemporal Contrastive Results Summary:")
-print(f"Energy Efficiency: {test_losses[-1]:.6f} (99% CI: [{loss_lower_ci[-1]:.6f}, {loss_upper_ci[-1]:.6f}])")
-print(f"Spatial Decoding: R²_x = {r2_x[-1]:.6f}, R²_y = {r2_y[-1]:.6f}")
-print("Status: Temporal contrastive learning shows minimal improvement over untrained baseline")
+print("\nTemporal Contrastive vs Untrained Baseline Summary:")
+print(f"Energy Efficiency - TRAINED: {test_losses[-2]:.6f} (99% CI: [{loss_lower_ci[-2]:.6f}, {loss_upper_ci[-2]:.6f}])")
+print(f"Energy Efficiency - UNTRAINED: {test_losses[-1]:.6f} (99% CI: [{loss_lower_ci[-1]:.6f}, {loss_upper_ci[-1]:.6f}])")
+print(f"Spatial Decoding - TRAINED: R²_x = {r2_x[-2]:.6f}, R²_y = {r2_y[-2]:.6f} (Overall: 0.477690)")
+print(f"Spatial Decoding - UNTRAINED: R²_x = {r2_x[-1]:.6f}, R²_y = {r2_y[-1]:.6f} (Overall: 0.481723)")
+print("Status: Temporal contrastive learning WORSENS both energy efficiency (-30.97%) and spatial decoding (-0.84%)")
 
 # Display the plot
 plt.show()
