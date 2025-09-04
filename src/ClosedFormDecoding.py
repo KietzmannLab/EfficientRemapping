@@ -57,6 +57,7 @@ def regressionCoordinates(net:ModelState, train_set:Dataset, test_set:Dataset, l
     pred_units_all = None
     reg_weights_all = None
     # for layer_idx in layer:
+    print("Getting training features")
     X_train, Y_train = getFeatures(net, train_set, layer_idx=layer, timestep=timestep)
     # print(f"Before relative: {np.isnan(X_train).sum(), np.isnan(Y_train).sum()}")
     if 'relative' in mode:
@@ -69,11 +70,13 @@ def regressionCoordinates(net:ModelState, train_set:Dataset, test_set:Dataset, l
     norm_factors = np.mean(X_train, axis=0)
     norm_factors += np.ones_like(norm_factors) * 0.000001
     X_train = X_train / norm_factors
-    reg = LinearRegression().fit(X_train, Y_train, 2, n_jobs=-1)
+    print("Fitting regression")
+    reg = LinearRegression(n_jobs=-1).fit(X_train, Y_train, 2)
     # print("regression fitted")
     # print(f"Training score layer {layer_idx}: {reg.score(X_train, Y_train)}")
     print(f"Training score: {reg.score(X_train, Y_train)}")
     torch.manual_seed(2553)
+    print("Getting test features")
     X_test, Y_test = getFeatures(net, test_set, layer_idx=layer, timestep=timestep)
     if 'relative' in mode:
         Y_test = changeToRelativeCoordinates(Y_test, prev='prev' in mode, timestep=timestep)

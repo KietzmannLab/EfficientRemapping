@@ -366,40 +366,6 @@ def compute_spatial_information(unit_activations, xy_coords, allocentric_units,
     return info_df, fig
 
 
-def compute_spatial_coherence(activations, spatial_bins, n_spatial_bins):
-    """
-    Compute spatial coherence - how smooth the spatial tuning is.
-    """
-    # Create 2D rate map
-    rate_map = np.zeros((n_spatial_bins, n_spatial_bins))
-    count_map = np.zeros((n_spatial_bins, n_spatial_bins))
-    
-    for i in range(len(spatial_bins)):
-        if 0 <= spatial_bins[i] < n_spatial_bins * n_spatial_bins:
-            row = spatial_bins[i] // n_spatial_bins
-            col = spatial_bins[i] % n_spatial_bins
-            if 0 <= row < n_spatial_bins and 0 <= col < n_spatial_bins:
-                rate_map[row, col] += activations[i]
-                count_map[row, col] += 1
-    
-    # Average rates
-    rate_map = np.divide(rate_map, count_map, out=np.zeros_like(rate_map), where=count_map!=0)
-    
-    # Compute correlations with neighboring bins
-    coherences = []
-    for i in range(1, n_spatial_bins-1):
-        for j in range(1, n_spatial_bins-1):
-            center_rate = rate_map[i, j]
-            neighbor_rates = [
-                rate_map[i-1, j], rate_map[i+1, j], 
-                rate_map[i, j-1], rate_map[i, j+1]
-            ]
-            neighbor_rates = [r for r in neighbor_rates if r > 0]
-            if len(neighbor_rates) > 0:
-                coherences.append(np.corrcoef([center_rate] + neighbor_rates)[0, 1:].mean())
-    
-    return np.mean(coherences) if coherences else 0
-
 
 def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units, 
                                unit_indices=None, grid_resolution=100, 
@@ -701,11 +667,6 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         unit_activations, xy_coords, top_xy_units, output_dir=output_dir
     )
     
-    # 5. Spatial information quantification
-    print("\n5. Computing spatial information metrics...")
-    info_results, fig_info = compute_spatial_information(
-        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
-    )
     
     # 6. Detailed 2D tuning curve heatmaps (fewer units)
     print("\n6. Creating detailed 2D tuning curve heatmaps...")
