@@ -16,24 +16,79 @@ import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy.interpolate import griddata
-from scipy.optimize import curve_fit
-from scipy import stats
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import silhouette_score, mutual_info_score
+from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
-from sklearn.feature_selection import mutual_info_regression
 import pandas as pd
 import os
 import pickle
+import json
 
 # Import existing infrastructure
 import RNN
 import functions
 from H5dataset import H5dataset
 import ClosedFormDecoding
+
+
+def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_recompute=False):
+    """
+    Load or compute and store identified xy units to avoid repeated regression.
+    
+    Args:
+        net: Trained RNN model
+        train_set: Training dataset
+        validation_set: Validation dataset
+        cache_path: Path to save/load cached xy units
+        force_recompute: Force recomputation even if cache exists
+        
+    Returns:
+        allocentric_units: Array of unit indices that encode xy coordinates
+        reg_weights: Regression weights for decoding
+        test_score: Decoding performance score
+    """
+    if not force_recompute and os.path.exists(cache_path):
+        print(f"Loading cached xy units from {cache_path}")
+        with open(cache_path, 'rb') as f:
+            cache_data = pickle.load(f)
+        return cache_data['allocentric_units'], cache_data['reg_weights'], cache_data['test_score']
+    
+    print("Identifying allocentric coding units (this may take a while)...")
+    
+    # Use existing methodology to identify xy units
+    pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
+        net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
+    )
+    
+    # Get top units for xy decoding (combine x and y predictive units)
+    n_top_units = min(50, pred_cells.shape[1] // 2)
+    top_x_units = pred_cells[0, -n_top_units:]
+    top_y_units = pred_cells[1, -n_top_units:]
+    allocentric_units = np.unique(np.concatenate([top_x_units, top_y_units]))
+    
+    print(f"Identified {len(allocentric_units)} top allocentric units")
+    print(f"X-coordinate decoding R²: {test_score}")
+    
+    # Cache the results
+    print(f"Caching xy units to {cache_path}")
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    cache_data = {
+        'allocentric_units': allocentric_units,
+        'reg_weights': reg_weights,
+        'test_score': test_score,
+        'pred_cells': pred_cells,
+        'model_info': {
+            'model_title': net.title if hasattr(net, 'title') else 'unknown',
+            'n_units': len(allocentric_units),
+            'decoding_score': test_score
+        }
+    }
+    with open(cache_path, 'wb') as f:
+        pickle.dump(cache_data, f)
+    
+    return allocentric_units, reg_weights, test_score
 
 
 def load_or_compute_activations(net, dataset, cache_path, force_recompute=False):
@@ -152,219 +207,205 @@ def plot_spatial_receptive_fields(unit_activations, xy_coords, allocentric_units
     return fig
 
 
-def analyze_coordinate_systems(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
+def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, xy_coords, cluster_labels, output_dir='./results'):
     """
-    Test different coordinate system representations.
+    Perform targeted in-silico lesions of unit clusters and analyze systematic errors.
+    
+    Args:
+        net: Trained RNN model
+        dataset: Dataset to test lesions on
+        allocentric_units: Unit indices of allocentric units
+        unit_activations: Original activations before lesioning
+        xy_coords: Ground truth coordinates
+        cluster_labels: Cluster assignment for each unit
+        output_dir: Directory to save results
+        
+    Returns:
+        lesion_results: Dictionary containing lesion analysis results
     """
-    print("Analyzing coordinate system preferences...")
+    print("Performing targeted in-silico lesions...")
     
-    # Convert to different coordinate systems
-    x, y = xy_coords[:, 0], xy_coords[:, 1]
+    n_clusters = len(np.unique(cluster_labels))
+    lesion_results = {}
     
-    # Cartesian (already have)
-    cartesian = np.column_stack([x, y])
+    # Get baseline decoding performance (all units active)
+    baseline_pred = decode_position_from_activations(unit_activations, xy_coords)
+    baseline_error = compute_position_errors(xy_coords, baseline_pred)
     
-    # Polar coordinates
-    r = np.sqrt(x**2 + y**2)  # Distance from origin
-    theta = np.arctan2(y, x)  # Angle
-    polar = np.column_stack([r, theta])
+    print(f"Baseline decoding error: {np.mean(baseline_error):.4f}")
     
-    # Log-polar (common in vision)
-    log_r = np.log(r + 1e-6)  # Add small epsilon to avoid log(0)
-    log_polar = np.column_stack([log_r, theta])
+    # Test lesioning each cluster
+    cluster_errors = {}
     
-    coordinate_systems = {
-        'Cartesian (x,y)': cartesian,
-        'Polar (r,θ)': polar, 
-        'Log-polar (log(r),θ)': log_polar
-    }
-    
-    # Test which coordinate system each unit prefers
-    results = []
-    
-    for unit_idx in range(unit_activations.shape[1]):
-        activations = unit_activations[:, unit_idx]
+    for cluster_id in range(n_clusters):
+        print(f"Testing lesion of cluster {cluster_id}...")
         
-        unit_results = {'unit_index': allocentric_units[unit_idx]}
+        # Create lesioned activations (set cluster units to zero)
+        cluster_mask = cluster_labels == cluster_id
+        lesioned_activations = unit_activations.copy()
+        lesioned_activations[:, cluster_mask] = 0
         
-        for coord_name, coords in coordinate_systems.items():
-            # Compute mutual information with each coordinate
-            mi_coord1 = mutual_info_regression(coords[:, [0]], activations)[0]
-            mi_coord2 = mutual_info_regression(coords[:, [1]], activations)[0]
-            
-            unit_results[f'{coord_name}_coord1_MI'] = mi_coord1
-            unit_results[f'{coord_name}_coord2_MI'] = mi_coord2
-            unit_results[f'{coord_name}_total_MI'] = mi_coord1 + mi_coord2
+        # Decode positions with lesioned network
+        lesioned_pred = decode_position_from_activations(lesioned_activations, xy_coords)
+        lesion_error = compute_position_errors(xy_coords, lesioned_pred)
         
-        results.append(unit_results)
-    
-    results_df = pd.DataFrame(results)
-    
-    # Find best coordinate system for each unit
-    coord_cols = [col for col in results_df.columns if 'total_MI' in col]
-    results_df['best_coordinate_system'] = results_df[coord_cols].idxmax(axis=1)
-    results_df['best_coordinate_system'] = results_df['best_coordinate_system'].str.replace('_total_MI', '')
-    
-    # Summary statistics
-    coord_preferences = results_df['best_coordinate_system'].value_counts()
-    
-    # Visualize coordinate system preferences
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # Bar plot of coordinate system preferences
-    coord_preferences.plot(kind='bar', ax=ax1)
-    ax1.set_title('Coordinate System Preferences')
-    ax1.set_xlabel('Coordinate System')
-    ax1.set_ylabel('Number of Units')
-    ax1.tick_params(axis='x', rotation=45)
-    
-    # Heatmap of mutual information
-    mi_matrix = results_df[[col for col in results_df.columns if 'total_MI' in col]].values
-    im = ax2.imshow(mi_matrix.T, aspect='auto', cmap='viridis')
-    ax2.set_title('Mutual Information with Coordinate Systems')
-    ax2.set_xlabel('Unit Index')
-    ax2.set_ylabel('Coordinate System')
-    ax2.set_yticks(range(len(coord_cols)))
-    ax2.set_yticklabels([col.replace('_total_MI', '') for col in coord_cols])
-    plt.colorbar(im, ax=ax2, shrink=0.8)
-    
-    plt.tight_layout()
-    
-    # Save results
-    fig.savefig(os.path.join(output_dir, 'coordinate_system_analysis.png'), 
-                dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'coordinate_system_analysis.svg'), 
-                bbox_inches='tight')
-    
-    results_df.to_csv(os.path.join(output_dir, 'coordinate_system_preferences.csv'), index=False)
-    
-    print(f"Coordinate system preferences:")
-    for coord_sys, count in coord_preferences.items():
-        print(f"  {coord_sys}: {count} units ({count/len(results_df)*100:.1f}%)")
-    
-    return results_df, fig
-
-
-def compute_spatial_information(unit_activations, xy_coords, allocentric_units, 
-                               n_spatial_bins=20, output_dir='./results'):
-    """
-    Compute spatial information content for each unit.
-    """
-    print("Computing spatial information content...")
-    
-    # Discretize space for information calculation
-    x_bins = np.linspace(xy_coords[:, 0].min(), xy_coords[:, 0].max(), n_spatial_bins)
-    y_bins = np.linspace(xy_coords[:, 1].min(), xy_coords[:, 1].max(), n_spatial_bins)
-    
-    # Assign each sample to spatial bin
-    x_bin_indices = np.digitize(xy_coords[:, 0], x_bins) - 1
-    y_bin_indices = np.digitize(xy_coords[:, 1], y_bins) - 1
-    
-    # Combined spatial bin index
-    spatial_bins = x_bin_indices * n_spatial_bins + y_bin_indices
-    
-    # Keep only valid bins
-    valid_mask = (x_bin_indices >= 0) & (x_bin_indices < n_spatial_bins) & \
-                 (y_bin_indices >= 0) & (y_bin_indices < n_spatial_bins)
-    
-    spatial_bins = spatial_bins[valid_mask]
-    unit_activations_valid = unit_activations[valid_mask]
-    xy_coords_valid = xy_coords[valid_mask]
-    
-    # Compute information metrics for each unit
-    info_results = []
-    
-    for unit_idx in range(unit_activations_valid.shape[1]):
-        activations = unit_activations_valid[:, unit_idx]
+        # Compute error vectors for systematic analysis
+        error_vectors = lesioned_pred - xy_coords
         
-        # Mutual information with spatial position
-        spatial_mi = mutual_info_regression(spatial_bins.reshape(-1, 1), activations)[0]
+        # Analyze systematic errors
+        error_analysis = analyze_systematic_errors(error_vectors)
         
-        # Mutual information with x and y separately
-        x_mi = mutual_info_regression(xy_coords_valid[:, [0]], activations)[0]
-        y_mi = mutual_info_regression(xy_coords_valid[:, [1]], activations)[0]
+        cluster_errors[cluster_id] = {
+            'mean_error': np.mean(lesion_error),
+            'error_increase': np.mean(lesion_error) - np.mean(baseline_error),
+            'error_vectors': error_vectors,
+            'systematic_analysis': error_analysis,
+            'lesioned_units': np.sum(cluster_mask)
+        }
         
-        # Spatial information rate (bits per spike, classic measure)
-        # Based on Skaggs et al. 1993
-        mean_rate = np.mean(activations)
-        spatial_info = 0
-        
-        if mean_rate > 0:
-            for bin_idx in range(n_spatial_bins * n_spatial_bins):
-                bin_mask = spatial_bins == bin_idx
-                if np.sum(bin_mask) > 5:  # Minimum samples per bin
-                    bin_rate = np.mean(activations[bin_mask])
-                    bin_occupancy = np.sum(bin_mask) / len(spatial_bins)
-                    if bin_rate > 0:
-                        spatial_info += bin_occupancy * bin_rate * np.log2(bin_rate / mean_rate)
-        
-        spatial_info /= mean_rate if mean_rate > 0 else 1
-        
-        # Spatial coherence (correlation between neighboring bins)
-        spatial_coherence = compute_spatial_coherence(activations, spatial_bins, n_spatial_bins)
-        
-        info_results.append({
-            'unit_index': allocentric_units[unit_idx],
-            'spatial_MI': spatial_mi,
-            'x_MI': x_mi,
-            'y_MI': y_mi,
-            'spatial_information_rate': spatial_info,
-            'spatial_coherence': spatial_coherence,
-            'mean_firing_rate': mean_rate,
-            'x_y_MI_ratio': x_mi / (y_mi + 1e-10)  # Preference for x vs y
+        print(f"  Cluster {cluster_id}: {cluster_errors[cluster_id]['lesioned_units']} units lesioned, "
+              f"error increase: {cluster_errors[cluster_id]['error_increase']:.4f}")
+    
+    # Create polar plots of systematic errors
+    create_error_polar_plots(cluster_errors, output_dir)
+    
+    # Save lesion results
+    lesion_summary = []
+    for cluster_id, results in cluster_errors.items():
+        lesion_summary.append({
+            'cluster_id': cluster_id,
+            'lesioned_units': results['lesioned_units'],
+            'mean_error': results['mean_error'],
+            'error_increase': results['error_increase'],
+            'preferred_error_direction': results['systematic_analysis']['preferred_direction'],
+            'error_concentration': results['systematic_analysis']['concentration'],
+            'horizontal_bias': results['systematic_analysis']['horizontal_bias'],
+            'vertical_bias': results['systematic_analysis']['vertical_bias']
         })
     
-    info_df = pd.DataFrame(info_results)
+    lesion_df = pd.DataFrame(lesion_summary)
+    lesion_df.to_csv(os.path.join(output_dir, 'cluster_lesion_analysis.csv'), index=False)
     
-    # Visualize spatial information
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    lesion_results = {
+        'baseline_error': baseline_error,
+        'cluster_errors': cluster_errors,
+        'lesion_summary': lesion_df
+    }
     
-    # Spatial information distribution
-    axes[0, 0].hist(info_df['spatial_information_rate'], bins=20, alpha=0.7)
-    axes[0, 0].set_xlabel('Spatial Information Rate (bits/spike)')
-    axes[0, 0].set_ylabel('Number of Units')
-    axes[0, 0].set_title('Distribution of Spatial Information')
+    return lesion_results
+
+
+def decode_position_from_activations(activations, true_coords):
+    """
+    Simple linear decoder to predict positions from activations.
+    """
+    from sklearn.linear_model import Ridge
     
-    # X vs Y mutual information
-    axes[0, 1].scatter(info_df['x_MI'], info_df['y_MI'], alpha=0.7)
-    axes[0, 1].plot([0, info_df[['x_MI', 'y_MI']].max().max()], 
-                    [0, info_df[['x_MI', 'y_MI']].max().max()], 'k--', alpha=0.5)
-    axes[0, 1].set_xlabel('X Mutual Information')
-    axes[0, 1].set_ylabel('Y Mutual Information')
-    axes[0, 1].set_title('X vs Y Coding Preferences')
+    # Split data for training decoder
+    n_samples = len(activations)
+    train_idx = np.random.choice(n_samples, size=n_samples//2, replace=False)
+    test_idx = np.setdiff1d(np.arange(n_samples), train_idx)
     
-    # Information vs firing rate
-    axes[1, 0].scatter(info_df['mean_firing_rate'], info_df['spatial_information_rate'], alpha=0.7)
-    axes[1, 0].set_xlabel('Mean Firing Rate')
-    axes[1, 0].set_ylabel('Spatial Information Rate')
-    axes[1, 0].set_title('Information vs Firing Rate')
+    # Train decoder
+    decoder = Ridge(alpha=1.0)
+    decoder.fit(activations[train_idx], true_coords[train_idx])
     
-    # Spatial coherence distribution  
-    axes[1, 1].hist(info_df['spatial_coherence'], bins=20, alpha=0.7)
-    axes[1, 1].set_xlabel('Spatial Coherence')
-    axes[1, 1].set_ylabel('Number of Units')
-    axes[1, 1].set_title('Spatial Coherence Distribution')
+    # Predict on all data
+    pred_coords = decoder.predict(activations)
+    return pred_coords
+
+
+def compute_position_errors(true_coords, pred_coords):
+    """
+    Compute Euclidean distance errors between true and predicted coordinates.
+    """
+    return np.sqrt(np.sum((true_coords - pred_coords)**2, axis=1))
+
+
+def analyze_systematic_errors(error_vectors):
+    """
+    Analyze systematic biases in error vectors.
+    
+    Args:
+        error_vectors: (n_samples, 2) array of error vectors [dx, dy]
+        
+    Returns:
+        analysis: Dictionary containing systematic error analysis
+    """
+    dx, dy = error_vectors[:, 0], error_vectors[:, 1]
+    
+    # Convert to polar coordinates
+    error_magnitudes = np.sqrt(dx**2 + dy**2)
+    error_angles = np.arctan2(dy, dx)
+    
+    # Compute circular statistics for error direction
+    mean_direction = np.arctan2(np.mean(np.sin(error_angles)), np.mean(np.cos(error_angles)))
+    
+    # Concentration parameter (higher = more systematic)
+    concentration = np.sqrt(np.mean(np.cos(error_angles))**2 + np.mean(np.sin(error_angles))**2)
+    
+    # Bias analysis
+    horizontal_bias = np.mean(dx)  # Positive = rightward bias
+    vertical_bias = np.mean(dy)    # Positive = upward bias
+    
+    analysis = {
+        'preferred_direction': mean_direction,
+        'concentration': concentration,
+        'horizontal_bias': horizontal_bias,
+        'vertical_bias': vertical_bias,
+        'mean_error_magnitude': np.mean(error_magnitudes)
+    }
+    
+    return analysis
+
+
+def create_error_polar_plots(cluster_errors, output_dir):
+    """
+    Create polar plots showing systematic error directions for each cluster lesion.
+    """
+    n_clusters = len(cluster_errors)
+    n_cols = min(3, n_clusters)
+    n_rows = int(np.ceil(n_clusters / n_cols))
+    
+    fig = plt.figure(figsize=(5*n_cols, 5*n_rows))
+    
+    for i, (cluster_id, results) in enumerate(cluster_errors.items()):
+        ax = fig.add_subplot(n_rows, n_cols, i+1, projection='polar')
+        
+        error_vectors = results['error_vectors']
+        dx, dy = error_vectors[:, 0], error_vectors[:, 1]
+        
+        # Convert to polar coordinates
+        error_angles = np.arctan2(dy, dx)
+        error_magnitudes = np.sqrt(dx**2 + dy**2)
+        
+        # Create histogram of error directions
+        angle_bins = np.linspace(-np.pi, np.pi, 25)
+        hist, bin_edges = np.histogram(error_angles, bins=angle_bins)
+        
+        # Plot as polar histogram
+        theta = (bin_edges[:-1] + bin_edges[1:]) / 2
+        ax.bar(theta, hist, width=np.diff(bin_edges)[0], alpha=0.7)
+        
+        # Add systematic bias vector
+        sys_analysis = results['systematic_analysis']
+        if sys_analysis['concentration'] > 0.1:  # Only show if concentrated
+            ax.arrow(sys_analysis['preferred_direction'], 0, 0, max(hist) * 0.8,
+                    head_width=0.2, head_length=max(hist)*0.1, fc='red', ec='red', linewidth=2)
+        
+        ax.set_title(f'Cluster {cluster_id} Lesion\nError Direction Distribution\n'
+                    f'({results["lesioned_units"]} units)', pad=20)
+        ax.set_ylabel('Error Count', labelpad=30)
     
     plt.tight_layout()
     
-    # Save results
-    fig.savefig(os.path.join(output_dir, 'spatial_information_analysis.png'), 
+    # Save figure
+    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.png'), 
                 dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'spatial_information_analysis.svg'), 
+    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.svg'), 
                 bbox_inches='tight')
     
-    info_df.to_csv(os.path.join(output_dir, 'spatial_information_metrics.csv'), index=False)
-    
-    # Print summary statistics
-    print(f"\nSpatial Information Summary:")
-    print(f"Mean spatial information: {info_df['spatial_information_rate'].mean():.3f} ± {info_df['spatial_information_rate'].std():.3f} bits/spike")
-    print(f"Units with high spatial info (>1 bit/spike): {(info_df['spatial_information_rate'] > 1).sum()}")
-    print(f"Mean spatial coherence: {info_df['spatial_coherence'].mean():.3f}")
-    print(f"X-preferring units (X MI > Y MI): {(info_df['x_MI'] > info_df['y_MI']).sum()}")
-    print(f"Y-preferring units (Y MI > X MI): {(info_df['y_MI'] > info_df['x_MI']).sum()}")
-    
-    return info_df, fig
-
+    return fig
 
 
 def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units, 
@@ -617,151 +658,119 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
 
 
 def analyze_allocentric_spatial_organization(trained_net, train_set, validation_set, 
-                                           output_dir='./results'):
+                                           output_dir='./results', force_recompute=False):
     """
-    Complete analysis of allocentric unit spatial organization.
+    Streamlined analysis focusing on clustering and spatial receptive fields with lesion analysis.
     
     Args:
         trained_net: Trained RNN model
         train_set: Training dataset  
         validation_set: Validation dataset
         output_dir: Directory to save all results
+        force_recompute: Force recomputation of cached data
         
     Returns:
-        results: Dictionary containing all analysis results
+        results: Dictionary containing analysis results
     """
     print("="*60)
-    print("ALLOCENTRIC SPATIAL ORGANIZATION ANALYSIS")
+    print("STREAMLINED ALLOCENTRIC ANALYSIS WITH LESION STUDIES")
     print("="*60)
     
-    # 1. Identify allocentric units using existing methodology
-    print("\n1. Identifying allocentric coding units...")
-    pred_cells, reg_weights, test_score = ClosedFormDecoding.regressionCoordinates(
-        trained_net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
+    # 1. Load or identify allocentric units (with caching)
+    print("\n1. Loading/identifying allocentric coding units...")
+    xy_units_cache_path = os.path.join(output_dir, "cached_xy_units.pkl")
+    allocentric_units, reg_weights, test_score = load_or_store_xy_units(
+        trained_net, train_set, validation_set, xy_units_cache_path, force_recompute
     )
-    
-    # Get top units for xy decoding (combine x and y predictive units)
-    n_top_units = min(50, pred_cells.shape[1] // 2)  # Top 50 or half, whichever is smaller
-    top_x_units = pred_cells[0, -n_top_units:]  # Top n units for x
-    top_y_units = pred_cells[1, -n_top_units:]  # Top n units for y
-    top_xy_units = np.unique(np.concatenate([top_x_units, top_y_units]))
-    
-    print(f"Identified {len(top_xy_units)} top allocentric units")
-    print(f"X-coordinate decoding R²: {test_score}")
     
     # 2. Extract continuous tuning data (with caching)
     print("\n2. Extracting 2D tuning profiles...")
     unit_activations, xy_coords = analyze_continuous_xy_tuning(
-        trained_net, validation_set, top_xy_units, output_dir=output_dir
+        trained_net, validation_set, allocentric_units, output_dir=output_dir
     )
     
-    # 3. Simple spatial receptive fields visualization (exploratory)
+    # 3. Spatial receptive fields visualization
     print("\n3. Plotting spatial receptive fields...")
     fig_receptive = plot_spatial_receptive_fields(
-        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
+        unit_activations, xy_coords, allocentric_units, n_units=16, output_dir=output_dir
     )
     
-    # 4. Coordinate system analysis
-    print("\n4. Analyzing coordinate system preferences...")
-    coord_results, fig_coord = analyze_coordinate_systems(
-        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
-    )
-    
-    
-    # 6. Detailed 2D tuning curve heatmaps (fewer units)
-    print("\n6. Creating detailed 2D tuning curve heatmaps...")
-    fig_tuning = visualize_2d_tuning_curves(
-        unit_activations, xy_coords, top_xy_units, 
-        unit_indices=list(range(min(16, len(top_xy_units)))), output_dir=output_dir
-    )
-    
-    # 7. Simple clustering analysis
-    print("\n7. Simple clustering analysis...")
+    # 4. Clustering analysis
+    print("\n4. Clustering analysis...")
     cluster_labels, optimal_k, fig_clustering = simple_clustering_analysis(
-        unit_activations, xy_coords, top_xy_units, output_dir=output_dir
+        unit_activations, xy_coords, allocentric_units, output_dir=output_dir
     )
     
-    # 8. Visualize cluster representatives (simplified)
-    print("\n8. Visualizing cluster representatives...")
+    # 5. Visualize cluster representatives
+    print("\n5. Visualizing cluster representatives...")
     fig_clusters = visualize_clusters_by_tuning(
-        unit_activations, xy_coords, top_xy_units, cluster_labels, output_dir=output_dir
+        unit_activations, xy_coords, allocentric_units, cluster_labels, output_dir=output_dir
     )
     
-    # 9. Save comprehensive results
-    print("\n9. Saving comprehensive results...")
+    # 6. Perform targeted cluster lesions
+    print("\n6. Performing targeted cluster lesions...")
+    lesion_results = perform_cluster_lesions(
+        trained_net, validation_set, allocentric_units, unit_activations, 
+        xy_coords, cluster_labels, output_dir=output_dir
+    )
     
-    # Combine all results into summary DataFrames
-    # Main results DataFrame combining spatial info and coordinate preferences
+    # 7. Save comprehensive results
+    print("\n7. Saving results...")
+    
+    # Main results DataFrame
     results_df = pd.DataFrame({
-        'unit_index': top_xy_units,
+        'unit_index': allocentric_units,
         'cluster': cluster_labels
     })
     
-    # Add spatial information metrics
-    results_df = results_df.merge(
-        info_results[['unit_index', 'spatial_MI', 'x_MI', 'y_MI', 'spatial_information_rate', 
-                     'spatial_coherence', 'mean_firing_rate', 'x_y_MI_ratio']], 
-        on='unit_index', how='left'
-    )
+    results_df.to_csv(os.path.join(output_dir, 'allocentric_units_analysis.csv'), index=False)
     
-    # Add coordinate system preferences
-    coord_summary = coord_results[['unit_index', 'best_coordinate_system']].copy()
-    results_df = results_df.merge(coord_summary, on='unit_index', how='left')
-    
-    results_df.to_csv(os.path.join(output_dir, 'allocentric_units_comprehensive_analysis.csv'), index=False)
-    
-    # Simple cluster summary
+    # Cluster summary with lesion effects
     cluster_summary = []
     for cluster_id in range(optimal_k):
         cluster_mask = cluster_labels == cluster_id
-        cluster_units = results_df[cluster_mask]
+        cluster_size = np.sum(cluster_mask)
+        
+        lesion_data = lesion_results['cluster_errors'][cluster_id]
         
         cluster_summary.append({
             'cluster_id': cluster_id,
-            'size': len(cluster_units),
-            'mean_spatial_info': cluster_units['spatial_information_rate'].mean(),
-            'mean_x_MI': cluster_units['x_MI'].mean(),
-            'mean_y_MI': cluster_units['y_MI'].mean(),
-            'dominant_coord_system': cluster_units['best_coordinate_system'].mode().iloc[0] if len(cluster_units) > 0 else 'unknown',
-            'mean_coherence': cluster_units['spatial_coherence'].mean()
+            'size': cluster_size,
+            'lesion_error_increase': lesion_data['error_increase'],
+            'preferred_error_direction': lesion_data['systematic_analysis']['preferred_direction'],
+            'error_concentration': lesion_data['systematic_analysis']['concentration'],
+            'horizontal_bias': lesion_data['systematic_analysis']['horizontal_bias'],
+            'vertical_bias': lesion_data['systematic_analysis']['vertical_bias']
         })
     
     cluster_summary_df = pd.DataFrame(cluster_summary)
-    cluster_summary_df.to_csv(os.path.join(output_dir, 'cluster_summary.csv'), index=False)
+    cluster_summary_df.to_csv(os.path.join(output_dir, 'cluster_lesion_summary.csv'), index=False)
     
     # Compile all results
     results = {
-        'allocentric_units': top_xy_units,
+        'allocentric_units': allocentric_units,
         'activations': unit_activations,
         'coordinates': xy_coords,
         'clusters': cluster_labels,
         'n_clusters': optimal_k,
         'decoding_score': test_score,
         'regression_weights': reg_weights,
-        'pred_cells': pred_cells,
-        'spatial_information': info_results,
-        'coordinate_preferences': coord_results,
-        'comprehensive_results': results_df,
+        'lesion_results': lesion_results,
+        'results_df': results_df,
         'cluster_summary': cluster_summary_df
     }
     
     print(f"\nAnalysis complete! Results saved to: {output_dir}")
-    print(f"- Found {len(top_xy_units)} allocentric units")
+    print(f"- Found {len(allocentric_units)} allocentric units (cached for future use)")
     print(f"- Identified {optimal_k} distinct clusters")
     print(f"- Decoding performance: R² = {test_score:.4f}")
     
-    # Print cluster summary
-    print("\nCluster Summary:")
+    # Print cluster summary with lesion effects
+    print("\nCluster Lesion Summary:")
     for _, row in cluster_summary_df.iterrows():
         print(f"  Cluster {row['cluster_id']}: {row['size']} units, "
-              f"info={row['mean_spatial_info']:.2f} bits/spike, "
-              f"coord_sys={row['dominant_coord_system']}")
-    
-    # Print coordinate system summary
-    coord_prefs = coord_results['best_coordinate_system'].value_counts()
-    print(f"\nOverall Coordinate System Preferences:")
-    for coord_sys, count in coord_prefs.items():
-        print(f"  {coord_sys}: {count} units ({count/len(coord_results)*100:.1f}%)")
+              f"lesion error increase: {row['lesion_error_increase']:.4f}, "
+              f"systematic bias: ({row['horizontal_bias']:.3f}, {row['vertical_bias']:.3f})")
     
     return results
 
@@ -843,7 +852,8 @@ def main():
     # Run complete analysis
     try:
         results = analyze_allocentric_spatial_organization(
-            net, train_set, validation_set, output_dir=args.output_dir
+            net, train_set, validation_set, output_dir=args.output_dir, 
+            force_recompute=args.force_recompute
         )
         
         print("\n" + "="*60)
@@ -852,15 +862,13 @@ def main():
         print(f"Results saved to: {args.output_dir}")
         print("\nGenerated files:")
         print("- spatial_receptive_fields.png/svg: Basic scatter plots of unit responses")
-        print("- coordinate_system_analysis.png/svg: Cartesian vs polar vs log-polar preferences") 
-        print("- spatial_information_analysis.png/svg: Information content and x/y selectivity")
-        print("- allocentric_tuning_curves.png/svg: Detailed 2D tuning curve heatmaps")
         print("- simple_clustering.png/svg: PCA and correlation-based clustering")
         print("- cluster_representatives.png/svg: Representative units for each cluster")
-        print("- allocentric_units_comprehensive_analysis.csv: Complete unit characteristics")
-        print("- spatial_information_metrics.csv: Information-theoretic measures")
-        print("- coordinate_system_preferences.csv: Coordinate system analysis")
-        print("- cluster_summary.csv: Summary statistics for each cluster")
+        print("- lesion_error_polar_plots.png/svg: Systematic error analysis from cluster lesions")
+        print("- allocentric_units_analysis.csv: Unit indices and cluster assignments")
+        print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
+        print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
+        print("- cached_xy_units.pkl: Cached allocentric unit identifications")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
     except Exception as e:
