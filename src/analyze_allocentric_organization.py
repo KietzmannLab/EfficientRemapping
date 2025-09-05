@@ -103,7 +103,10 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         else:
             print("Cache missing lesion map - will recompute for full consistency")
             # Could force recompute here if needed
-        return cache_data['allocentric_units'], cache_data['reg_weights'], cache_data['test_score']
+        # Return all lesioned units if available, otherwise fall back to old format
+        all_lesioned_units = cache_data.get('all_lesioned_units', 
+                                          cache_data.get('lesioned_units', cache_data['allocentric_units']))
+        return all_lesioned_units, cache_data['reg_weights'], cache_data['test_score']
     
     print("Identifying allocentric coding units (this may take a while)...")
     
@@ -113,30 +116,42 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
     )
     
     # Process lesion map exactly like RNN.py for perfect consistency
-    lesion_map_list, allocentric_units = process_lesion_map_like_rnn(pred_cells, verbose=True)
+    lesion_map_list, all_allocentric_units = process_lesion_map_like_rnn(pred_cells, verbose=True)
     
-    print(f"Identified {len(allocentric_units)} top allocentric units")
+    # Get ALL units that actually get lesioned in RNN experiments (both layers)
+    lesioned_layer1, lesioned_layer2, all_lesioned_units = get_rnn_lesioned_units_both_layers(lesion_map_list, verbose=True)
+    
+    print(f"Total allocentric units identified: {len(all_allocentric_units)}")
+    print(f"Units actually lesioned in RNN: {len(all_lesioned_units)}")
+    print(f"  - Layer 1: {len(lesioned_layer1)} units")
+    print(f"  - Layer 2: {len(lesioned_layer2)} units")
     print(f"X-coordinate decoding R²: {test_score}")
     
     # Cache the results
     print(f"Caching xy units to {cache_path}")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     cache_data = {
-        'allocentric_units': allocentric_units,
+        'allocentric_units': all_allocentric_units,  # All identified units
+        'lesioned_units_layer1': lesioned_layer1,   # Layer 1 lesioned units
+        'lesioned_units_layer2': lesioned_layer2,   # Layer 2 lesioned units  
+        'all_lesioned_units': all_lesioned_units,   # Combined lesioned units
         'reg_weights': reg_weights,
         'test_score': test_score,
         'pred_cells': pred_cells,
         'lesion_map_list': lesion_map_list,
         'model_info': {
             'model_title': net.title if hasattr(net, 'title') else 'unknown',
-            'n_units': len(allocentric_units),
+            'n_total_units': len(all_allocentric_units),
+            'n_lesioned_layer1': len(lesioned_layer1),
+            'n_lesioned_layer2': len(lesioned_layer2),
+            'n_all_lesioned': len(all_lesioned_units),
             'decoding_score': test_score
         }
     }
     with open(cache_path, 'wb') as f:
         pickle.dump(cache_data, f)
     
-    return allocentric_units, reg_weights, test_score
+    return all_lesioned_units, reg_weights, test_score
 
 
 def load_or_compute_activations(net, dataset, cache_path, force_recompute=False):
@@ -189,21 +204,65 @@ def load_or_compute_activations(net, dataset, cache_path, force_recompute=False)
     return activations, xy_coords
 
 
-def analyze_continuous_xy_tuning(net, dataset, allocentric_units, output_dir='./results'):
+def get_rnn_lesioned_units_both_layers(lesion_map_list, verbose=True):
     """
-    Extract continuous 2D tuning curves for allocentric units.
+    Extract ALL units that actually get lesioned in RNN.py (both Layer 1 and Layer 2).
+    This constrains analysis to the exact same units that are lesioned in experiments.
+    
+    Args:
+        lesion_map_list: 4-element list from process_lesion_map_like_rnn
+        verbose: Print debug information
+        
+    Returns:
+        lesioned_units_layer1: Units lesioned in Layer 1 (< 2048)
+        lesioned_units_layer2: Units lesioned in Layer 2 (>= 2048, original indices)
+        all_lesioned_units: Combined unique units from both layers
+    """
+    # Layer 1 units (indices 0 and 1 in lesion_map_list)
+    x_units_layer1 = lesion_map_list[0]  # X-predictive units < 2048
+    y_units_layer1 = lesion_map_list[1]  # Y-predictive units < 2048
+    
+    # Layer 2 units (indices 2 and 3 in lesion_map_list) 
+    # Note: these were adjusted by -2048, so add back to get original indices
+    x_units_layer2 = lesion_map_list[2] + 2048 if len(lesion_map_list[2]) > 0 else np.array([])
+    y_units_layer2 = lesion_map_list[3] + 2048 if len(lesion_map_list[3]) > 0 else np.array([])
+    
+    lesioned_units_layer1 = np.unique(np.concatenate([x_units_layer1, y_units_layer1]))
+    lesioned_units_layer2 = np.unique(np.concatenate([x_units_layer2, y_units_layer2])) if len(x_units_layer2) > 0 or len(y_units_layer2) > 0 else np.array([])
+    
+    # Combine all lesioned units
+    if len(lesioned_units_layer2) > 0:
+        all_lesioned_units = np.unique(np.concatenate([lesioned_units_layer1, lesioned_units_layer2]))
+    else:
+        all_lesioned_units = lesioned_units_layer1
+    
+    if verbose:
+        print(f"RNN-lesioned units in Layer 1 (< 2048): {len(lesioned_units_layer1)} units")
+        print(f"  X-units Layer 1: {x_units_layer1}")
+        print(f"  Y-units Layer 1: {y_units_layer1}")
+        print(f"RNN-lesioned units in Layer 2 (>= 2048): {len(lesioned_units_layer2)} units")
+        print(f"  X-units Layer 2: {x_units_layer2}")
+        print(f"  Y-units Layer 2: {y_units_layer2}")
+        print(f"Total unique lesioned units: {len(all_lesioned_units)}")
+    
+    return lesioned_units_layer1, lesioned_units_layer2, all_lesioned_units
+
+
+def analyze_continuous_xy_tuning(net, dataset, lesioned_units, output_dir='./results'):
+    """
+    Extract continuous 2D tuning curves for RNN-lesioned allocentric units only.
     
     Args:
         net: Trained RNN model
         dataset: Dataset to analyze  
-        allocentric_units: Indices of units that encode xy coordinates
+        lesioned_units: Exact units that get lesioned in RNN experiments
         output_dir: Directory for caching activations
         
     Returns:
-        unit_activations: (n_samples, n_units) activations of allocentric units
+        unit_activations: (n_samples, n_lesioned_units) activations
         xy_coords: (n_samples, 2) corresponding x,y coordinates
     """
-    print(f"Extracting tuning data for {len(allocentric_units)} allocentric units...")
+    print(f"Extracting tuning data for {len(lesioned_units)} RNN-lesioned units...")
     
     # Create cache path for activations
     cache_filename = f"activations_cache_{getattr(dataset, 'split', 'unknown')}.pkl"
@@ -212,10 +271,10 @@ def analyze_continuous_xy_tuning(net, dataset, allocentric_units, output_dir='./
     # Load or compute full activations
     activations, xy_coords = load_or_compute_activations(net, dataset, cache_path)
     
-    # Focus on identified allocentric units
-    unit_activations = activations[:, allocentric_units]
+    # Focus ONLY on RNN-lesioned units
+    unit_activations = activations[:, lesioned_units]
     
-    print(f"Selected allocentric units data shape: activations {unit_activations.shape}, coords {xy_coords.shape}")
+    print(f"RNN-lesioned units data shape: activations {unit_activations.shape}, coords {xy_coords.shape}")
     return unit_activations, xy_coords
 
 
@@ -327,8 +386,8 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
         print(f"  Cluster {cluster_id}: {cluster_errors[cluster_id]['lesioned_units']} units lesioned, "
               f"error increase: {cluster_errors[cluster_id]['error_increase']:.4f}")
     
-    # Create polar plots of systematic errors
-    fig_polar_count, fig_polar_amplitude = create_error_polar_plots(cluster_errors, output_dir)
+    # Create polar plots of systematic errors with scatter plots
+    fig_polar_count, fig_polar_scatter = create_error_polar_plots_with_scatter(cluster_errors, output_dir)
     
     # Save lesion results
     lesion_summary = []
@@ -420,33 +479,34 @@ def analyze_systematic_errors(error_vectors):
     return analysis
 
 
-def create_error_polar_plots(cluster_errors, output_dir):
+def create_error_polar_plots_with_scatter(cluster_errors, output_dir):
     """
-    Create publication-quality polar plots showing systematic error directions for each cluster lesion.
-    Creates both count-based and amplitude-weighted plots.
+    Create publication-quality polar plots with error count histograms and amplitude scatter plots.
+    Following plot_supplementary_results.py styling.
     """
     n_clusters = len(cluster_errors)
     n_cols = min(4, n_clusters)
     n_rows = int(np.ceil(n_clusters / n_cols))
     
-    # Create two figures: one for error counts, one for amplitude-weighted
-    fig1, axes1 = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), 
+    # Publication colors following plot_supplementary_results.py palette
+    full_color = '#27ae60'  # Emerald green
+    cluster_colors = sns.color_palette('Set2', n_clusters)
+    
+    # Create two figures: count histograms and amplitude scatter
+    fig1, axes1 = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows), 
                                subplot_kw=dict(projection='polar'))
-    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), 
+    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows), 
                                subplot_kw=dict(projection='polar'))
     
     if n_clusters == 1:
         axes1 = [axes1]
         axes2 = [axes2]
     elif n_rows == 1:
-        axes1 = axes1.flatten()
-        axes2 = axes2.flatten()
+        axes1 = axes1.flatten() if n_clusters > 1 else [axes1]
+        axes2 = axes2.flatten() if n_clusters > 1 else [axes2]
     else:
         axes1 = axes1.flatten()
         axes2 = axes2.flatten()
-    
-    # Color palette for consistency with paper style
-    colors = sns.color_palette('Set2', n_clusters)
     
     for i, (cluster_id, results) in enumerate(cluster_errors.items()):
         if i >= len(axes1):
@@ -459,63 +519,78 @@ def create_error_polar_plots(cluster_errors, output_dir):
         error_angles = np.arctan2(dy, dx)
         error_magnitudes = np.sqrt(dx**2 + dy**2)
         
-        # Create bins for histograms
+        # Plot 1: Error count histogram (publication style)
         angle_bins = np.linspace(-np.pi, np.pi, 25)
+        hist_counts, _ = np.histogram(error_angles, bins=angle_bins)
         bin_centers = (angle_bins[:-1] + angle_bins[1:]) / 2
         bin_width = np.diff(angle_bins)[0]
         
-        # Plot 1: Error count histogram
-        hist_counts, _ = np.histogram(error_angles, bins=angle_bins)
-        bars1 = axes1[i].bar(bin_centers, hist_counts, width=bin_width, 
-                            color=colors[i], alpha=0.7, edgecolor='black', linewidth=0.5)
+        axes1[i].bar(bin_centers, hist_counts, width=bin_width,
+                    color=cluster_colors[i], alpha=0.8, edgecolor='black', linewidth=1)
         
-        # Plot 2: Amplitude-weighted histogram  
-        hist_weighted = np.zeros(len(bin_centers))
-        for j, (angle, magnitude) in enumerate(zip(error_angles, error_magnitudes)):
-            bin_idx = np.digitize(angle, angle_bins) - 1
-            if 0 <= bin_idx < len(hist_weighted):
-                hist_weighted[bin_idx] += magnitude
+        # Plot 2: Amplitude-weighted scatter plot
+        # Subsample for performance and visibility if too many points
+        max_points = 1000
+        if len(error_angles) > max_points:
+            indices = np.random.choice(len(error_angles), max_points, replace=False)
+            plot_angles = error_angles[indices]
+            plot_magnitudes = error_magnitudes[indices]
+        else:
+            plot_angles = error_angles
+            plot_magnitudes = error_magnitudes
         
-        bars2 = axes2[i].bar(bin_centers, hist_weighted, width=bin_width,
-                            color=colors[i], alpha=0.7, edgecolor='black', linewidth=0.5)
+        # Create scatter plot with magnitude as color
+        scatter = axes2[i].scatter(plot_angles, plot_magnitudes, 
+                                  c=plot_magnitudes, cmap='viridis', 
+                                  alpha=0.7, s=30, edgecolors='black', linewidth=0.5)
         
-        # Add systematic bias arrows
+        # Add systematic bias arrows (following paper style)
         sys_analysis = results['systematic_analysis']
         if sys_analysis['concentration'] > 0.1:
             # Arrow for count plot
-            arrow_length1 = max(hist_counts) * 0.6 if max(hist_counts) > 0 else 1
+            arrow_length1 = max(hist_counts) * 0.7 if max(hist_counts) > 0 else 1
             axes1[i].arrow(sys_analysis['preferred_direction'], 0, 0, arrow_length1,
-                          head_width=0.15, head_length=arrow_length1*0.1, 
-                          fc='red', ec='red', linewidth=2, alpha=0.8)
+                          head_width=0.15, head_length=arrow_length1*0.12, 
+                          fc='red', ec='red', linewidth=2.5, alpha=0.9)
             
-            # Arrow for amplitude plot
-            arrow_length2 = max(hist_weighted) * 0.6 if max(hist_weighted) > 0 else 1
+            # Arrow for scatter plot
+            arrow_length2 = np.percentile(plot_magnitudes, 90) if len(plot_magnitudes) > 0 else 1
             axes2[i].arrow(sys_analysis['preferred_direction'], 0, 0, arrow_length2,
-                          head_width=0.15, head_length=arrow_length2*0.1,
-                          fc='red', ec='red', linewidth=2, alpha=0.8)
+                          head_width=0.15, head_length=arrow_length2*0.12,
+                          fc='red', ec='red', linewidth=2.5, alpha=0.9)
         
-        # Style axes
-        for ax, title_suffix in [(axes1[i], 'Error Count'), (axes2[i], 'Amplitude-Weighted')]:
+        # Publication styling (following plot_supplementary_results.py)
+        for ax_idx, (ax, title_suffix) in enumerate([(axes1[i], 'Error Count'), 
+                                                      (axes2[i], 'Error Amplitude')]):
             ax.set_title(f'Cluster {cluster_id}\n{title_suffix}\n({results["lesioned_units"]} units)', 
-                        fontweight='bold', pad=20, fontsize=12)
-            ax.grid(True, alpha=0.3)
-            ax.set_theta_zero_location('E')  # 0° at East
+                        fontweight='bold', fontsize=14, pad=25)
+            ax.grid(True, alpha=0.4, linewidth=0.8)
+            ax.set_theta_zero_location('E')  # 0° at East (rightward)
             ax.set_theta_direction(1)  # Counterclockwise
+            
+            # Clean tick labels
+            ax.tick_params(axis='both', which='major', labelsize=11)
+            
+            # Add colorbar for scatter plot
+            if ax_idx == 1 and len(plot_magnitudes) > 0:  # Scatter plot
+                cbar = plt.colorbar(scatter, ax=ax, shrink=0.8, pad=0.1)
+                cbar.set_label('Error Magnitude', fontweight='bold', 
+                              rotation=270, labelpad=20, fontsize=12)
+                cbar.ax.tick_params(labelsize=10)
     
     # Hide unused subplots
     for i in range(n_clusters, len(axes1)):
         axes1[i].set_visible(False)
         axes2[i].set_visible(False)
     
-    # Style and save figures
-    for fig, name_suffix in [(fig1, 'count'), (fig2, 'amplitude')]:
-        fig.suptitle(f'Systematic Error Analysis - {name_suffix.title()}', 
-                    fontsize=16, fontweight='bold', y=0.95)
-        plt.tight_layout()
+    # Style figures following plot_supplementary_results.py
+    for fig, name_suffix, plot_type in [(fig1, 'count', 'Error Count Distribution'), 
+                                        (fig2, 'scatter', 'Error Amplitude Scatter')]:
+        fig.suptitle(f'Systematic Error Analysis: {plot_type}', 
+                    fontsize=18, fontweight='bold', y=0.95)
+        plt.tight_layout(rect=[0, 0.02, 1, 0.95])  # Leave space for suptitle
         
-        # Remove spines for cleaner look (following paper style)
-        
-        # Save figures
+        # Save figures (following plot_supplementary_results.py format)
         fig.savefig(os.path.join(output_dir, f'lesion_error_polar_{name_suffix}.png'), 
                    dpi=300, bbox_inches='tight')
         fig.savefig(os.path.join(output_dir, f'lesion_error_polar_{name_suffix}.svg'), 
@@ -841,41 +916,41 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     print("STREAMLINED ALLOCENTRIC ANALYSIS WITH LESION STUDIES")
     print("="*60)
     
-    # 1. Load or identify allocentric units (with caching)
-    print("\n1. Loading/identifying allocentric coding units...")
+    # 1. Load or identify RNN-lesioned units (with caching)
+    print("\n1. Loading/identifying RNN-lesioned allocentric units...")
     xy_units_cache_path = os.path.join(output_dir, "cached_xy_units.pkl")
-    allocentric_units, reg_weights, test_score = load_or_store_xy_units(
+    lesioned_units, reg_weights, test_score = load_or_store_xy_units(
         trained_net, train_set, validation_set, xy_units_cache_path, force_recompute
     )
     
-    # 2. Extract continuous tuning data (with caching)
-    print("\n2. Extracting 2D tuning profiles...")
+    # 2. Extract continuous tuning data for RNN-lesioned units only
+    print("\n2. Extracting 2D tuning profiles for RNN-lesioned units...")
     unit_activations, xy_coords = analyze_continuous_xy_tuning(
-        trained_net, validation_set, allocentric_units, output_dir=output_dir
+        trained_net, validation_set, lesioned_units, output_dir=output_dir
     )
     
-    # 3. Spatial receptive fields visualization
+    # 3. Spatial receptive fields visualization (RNN-lesioned units only)
     print("\n3. Plotting spatial receptive fields...")
     fig_receptive = plot_spatial_receptive_fields(
-        unit_activations, xy_coords, allocentric_units, n_units=16, output_dir=output_dir
+        unit_activations, xy_coords, lesioned_units, n_units=len(lesioned_units), output_dir=output_dir
     )
     
-    # 4. Clustering analysis
+    # 4. Clustering analysis (RNN-lesioned units only)
     print("\n4. Clustering analysis...")
     cluster_labels, optimal_k, fig_clustering = simple_clustering_analysis(
-        unit_activations, xy_coords, allocentric_units, output_dir=output_dir
+        unit_activations, xy_coords, lesioned_units, output_dir=output_dir
     )
     
-    # 5. Visualize cluster representatives
+    # 5. Visualize cluster representatives (RNN-lesioned units only)
     print("\n5. Visualizing cluster representatives...")
     fig_clusters = visualize_clusters_by_tuning(
-        unit_activations, xy_coords, allocentric_units, cluster_labels, output_dir=output_dir
+        unit_activations, xy_coords, lesioned_units, cluster_labels, output_dir=output_dir
     )
     
-    # 6. Perform targeted cluster lesions with publication-quality polar plots
+    # 6. Perform targeted cluster lesions with polar scatter plots
     print("\n6. Performing targeted cluster lesions...")
     lesion_results = perform_cluster_lesions(
-        trained_net, validation_set, allocentric_units, unit_activations, 
+        trained_net, validation_set, lesioned_units, unit_activations, 
         xy_coords, cluster_labels, output_dir=output_dir
     )
     
@@ -884,11 +959,11 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     # Main results DataFrame
     results_df = pd.DataFrame({
-        'unit_index': allocentric_units,
+        'unit_index': lesioned_units,
         'cluster': cluster_labels
     })
     
-    results_df.to_csv(os.path.join(output_dir, 'allocentric_units_analysis.csv'), index=False)
+    results_df.to_csv(os.path.join(output_dir, 'lesioned_units_analysis.csv'), index=False)
     
     # Cluster summary with lesion effects
     cluster_summary = []
@@ -913,7 +988,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     # Compile all results
     results = {
-        'allocentric_units': allocentric_units,
+        'lesioned_units': lesioned_units,
         'activations': unit_activations,
         'coordinates': xy_coords,
         'clusters': cluster_labels,
@@ -926,7 +1001,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     }
     
     print(f"\nAnalysis complete! Results saved to: {output_dir}")
-    print(f"- Found {len(allocentric_units)} allocentric units (cached for future use)")
+    print(f"- Analyzed {len(lesioned_units)} RNN-lesioned allocentric units")
     print(f"- Identified {optimal_k} distinct clusters")
     print(f"- Decoding performance: R² = {test_score:.4f}")
     
@@ -1029,12 +1104,12 @@ def main():
         print("- spatial_receptive_fields.png/svg: Publication-quality spatial receptive fields")
         print("- clustering_analysis.png/svg: PCA and correlation-based clustering analysis")
         print("- cluster_representatives.png/svg: Representative tuning curves for each cluster")
-        print("- lesion_error_polar_count.png/svg: Error count polar plots for cluster lesions")
-        print("- lesion_error_polar_amplitude.png/svg: Amplitude-weighted error polar plots")
-        print("- allocentric_units_analysis.csv: Unit indices and cluster assignments")
+        print("- lesion_error_polar_count.png/svg: Error count histograms for cluster lesions")
+        print("- lesion_error_polar_scatter.png/svg: Error amplitude polar scatter plots")
+        print("- lesioned_units_analysis.csv: RNN-lesioned unit indices and cluster assignments")
         print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
         print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
-        print("- cached_xy_units.pkl: Cached allocentric unit identifications (top 11)")
+        print("- cached_xy_units.pkl: Cached RNN-lesioned unit identifications")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
     except Exception as e:
