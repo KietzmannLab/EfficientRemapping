@@ -41,14 +41,15 @@ import ClosedFormDecoding
 def lesion_specific_units(verbose=True):
     """
     Lesion specific predefined units based on your provided list.
+    Handles concatenated layer activations from getFeatures([1, 2]).
     
     Args:
         verbose: Print debug information
         
     Returns:
         lesioned_units_dict: Dictionary with layer-specific unit lists
-        all_lesioned_units: Combined array of all units to be lesioned
-        layer_assignments: Dictionary mapping units to layers
+        concatenated_indices: Array of indices for concatenated activations (Layer1 + Layer2)
+        layer_assignments: Dictionary mapping concatenated indices to layers
     """
     # Predefined lesioned units (matching your specification)
     lesioned_units = {
@@ -58,34 +59,36 @@ def lesion_specific_units(verbose=True):
     
     if verbose:
         print("Using predefined lesioned units:")
-        print(f"Layer 1 units: {lesioned_units[1]}")
-        print(f"Layer 2 units: {lesioned_units[2]}")
+        print(f"Layer 1 units (original indices): {lesioned_units[1]}")
+        print(f"Layer 2 units (original indices): {lesioned_units[2]}")
     
-    # Create weights-like structure for layer assignment
-    all_units = []
+    # Convert to concatenated activation indices
+    # getFeatures([1, 2]) concatenates: [Layer1_units, Layer2_units] 
+    # So Layer1 units keep their indices, Layer2 units get +2048
+    concatenated_indices = []
     layer_assignments = {}
     
-    # Process Layer 1 units (< 2048)
+    # Layer 1 units: use indices directly (they're in positions 0-2047 of concatenated array)
     for unit in lesioned_units[1]:
-        all_units.append(unit)
+        concatenated_indices.append(unit)
         layer_assignments[unit] = 1
     
-    # Process Layer 2 units (add 2048 for global indexing)
-    layer2_global_units = [unit + 2048 for unit in lesioned_units[2]]
-    for orig_unit, global_unit in zip(lesioned_units[2], layer2_global_units):
-        all_units.append(global_unit)
-        layer_assignments[global_unit] = 2
+    # Layer 2 units: add 2048 (they're in positions 2048-4095 of concatenated array)
+    for unit in lesioned_units[2]:
+        concat_idx = unit + 2048
+        concatenated_indices.append(concat_idx)
+        layer_assignments[concat_idx] = 2
     
-    all_lesioned_units = np.array(all_units)
+    concatenated_indices = np.array(concatenated_indices)
     
     if verbose:
-        print(f"Layer 1 units (< 2048): {lesioned_units[1]}")
-        print(f"Layer 2 units (original): {lesioned_units[2]}")
-        print(f"Layer 2 units (global): {layer2_global_units}")
-        print(f"Total units to lesion: {len(all_lesioned_units)}")
-        print(f"All lesioned unit indices: {all_lesioned_units}")
+        print(f"Concatenated activation indices:")
+        print(f"  Layer 1 units: {lesioned_units[1]} (indices 0-2047)")
+        print(f"  Layer 2 units: {[u + 2048 for u in lesioned_units[2]]} (indices 2048-4095)")
+        print(f"Total units to analyze: {len(concatenated_indices)}")
+        print(f"All concatenated indices: {concatenated_indices}")
     
-    return lesioned_units, all_lesioned_units, layer_assignments
+    return lesioned_units, concatenated_indices, layer_assignments
 
 
 def select_top_regression_units_separate_xy(reg_weights, percentage=0.05, verbose=True):
@@ -208,21 +211,21 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         print(f"Loading cached xy units from {cache_path}")
         with open(cache_path, 'rb') as f:
             cache_data = pickle.load(f)
-        # Only use cache if it contains the predefined specific units method
+        # Only use cache if it contains the concatenated predefined units method
         selection_method = cache_data.get('selection_method', 'unknown')
-        if selection_method == 'predefined_specific_units':
-            print("Cache contains predefined specific lesioned units")
+        if selection_method == 'predefined_specific_units_concatenated':
+            print("Cache contains predefined lesioned units with concatenated indices")
             if 'model_info' in cache_data:
                 info = cache_data['model_info']
                 print(f"  - Layer 1 units: {info.get('n_lesioned_layer1', 'unknown')}")
                 print(f"  - Layer 2 units: {info.get('n_lesioned_layer2', 'unknown')}")
-                print(f"  - Total units: {info.get('n_all_lesioned', 'unknown')}")
+                print(f"  - Total concatenated indices: {info.get('n_all_lesioned', 'unknown')}")
             # Return cached results
             all_lesioned_units = cache_data['all_lesioned_units']
             return all_lesioned_units, cache_data['reg_weights'], cache_data['test_score']
         else:
             print(f"Cache contains old selection method ({selection_method}) - ignoring and recomputing")
-            print("Will use predefined specific lesioned units")
+            print("Will use predefined specific lesioned units with concatenated indexing")
     
     print("Identifying allocentric coding units (this may take a while)...")
     
@@ -231,12 +234,15 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
     )
     
-    # Use predefined specific lesioned units
-    lesioned_units_dict, all_lesioned_units, layer_assignments = lesion_specific_units(verbose=True)
+    # Use predefined specific lesioned units with correct concatenated indices
+    lesioned_units_dict, concatenated_indices, layer_assignments = lesion_specific_units(verbose=True)
     
-    # Separate units by layer for consistency with analysis structure
-    lesioned_layer1 = np.array(lesioned_units_dict[1])  # Layer 1 units
-    lesioned_layer2 = np.array([unit + 2048 for unit in lesioned_units_dict[2]])  # Layer 2 units (global indices)
+    # The concatenated_indices are what we use for extracting activations
+    all_lesioned_units = concatenated_indices
+    
+    # Separate for display/caching (keep original layer-specific format)
+    lesioned_layer1 = np.array(lesioned_units_dict[1])  # Original Layer 1 indices
+    lesioned_layer2 = np.array(lesioned_units_dict[2])  # Original Layer 2 indices
     
     print(f"Predefined lesioned units:")
     print(f"  - Layer 1: {len(lesioned_layer1)} units")
@@ -249,18 +255,19 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     cache_data = {
         'lesioned_units_dict': lesioned_units_dict,     # Original layer-specific units
-        'lesioned_units_layer1': lesioned_layer1,       # Layer 1 lesioned units
-        'lesioned_units_layer2': lesioned_layer2,       # Layer 2 lesioned units (global indices)  
-        'all_lesioned_units': all_lesioned_units,       # Combined lesioned units
+        'concatenated_indices': concatenated_indices,   # Concatenated activation indices
+        'lesioned_units_layer1': lesioned_layer1,       # Layer 1 original indices
+        'lesioned_units_layer2': lesioned_layer2,       # Layer 2 original indices  
+        'all_lesioned_units': all_lesioned_units,       # Concatenated indices for activations
         'layer_assignments': layer_assignments,         # Unit to layer mapping
         'reg_weights': reg_weights,
         'test_score': test_score,
         'pred_cells': pred_cells,
-        'selection_method': 'predefined_specific_units',
+        'selection_method': 'predefined_specific_units_concatenated',
         'model_info': {
             'model_title': net.title if hasattr(net, 'title') else 'unknown',
             'n_lesioned_layer1': len(lesioned_layer1),
-            'n_lesioned_layer2': len(lesioned_units_dict[2]),
+            'n_lesioned_layer2': len(lesioned_layer2),
             'n_all_lesioned': len(all_lesioned_units),
             'decoding_score': test_score,
             'layer1_units': lesioned_units_dict[1],
@@ -401,11 +408,20 @@ def plot_spatial_receptive_fields(unit_activations, xy_coords, allocentric_units
                                   n_units=9, output_dir='./results'):
     """
     Plot publication-quality spatial receptive fields for top units.
+    
+    Args:
+        unit_activations: (n_samples, n_lesioned_units) activations for lesioned units only
+        xy_coords: (n_samples, 2) x,y coordinates 
+        allocentric_units: Concatenated indices of lesioned units for labeling
+        n_units: Number of units to plot
+        output_dir: Directory to save figures
     """
     print(f"Creating spatial receptive field plots for {n_units} units...")
     
-    # Select units to visualize
-    unit_indices = np.linspace(0, len(allocentric_units)-1, n_units).astype(int)
+    # Select units to visualize from the available lesioned units
+    # unit_indices are indices into unit_activations (0 to n_lesioned_units-1)
+    available_units = min(n_units, len(allocentric_units))
+    unit_indices = np.linspace(0, len(allocentric_units)-1, available_units).astype(int)
     
     fig, axes = plt.subplots(3, 3, figsize=(15, 15))
     axes = axes.flatten()
@@ -421,6 +437,7 @@ def plot_spatial_receptive_fields(unit_activations, xy_coords, allocentric_units
         
         axes[i].set_xlabel('X coordinate', fontweight='bold')
         axes[i].set_ylabel('Y coordinate', fontweight='bold')
+        # allocentric_units[unit_idx] gives the original concatenated index for labeling
         axes[i].set_title(f'Unit {allocentric_units[unit_idx]}', 
                          fontweight='bold', fontsize=14)
         
@@ -453,8 +470,8 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
     Args:
         net: Trained RNN model
         dataset: Dataset to test lesions on
-        allocentric_units: Unit indices of allocentric units
-        unit_activations: Original activations before lesioning
+        allocentric_units: Unit indices of allocentric units (concatenated indices for activations)
+        unit_activations: Original activations before lesioning (n_samples, n_lesioned_units)
         xy_coords: Ground truth coordinates
         cluster_labels: Cluster assignment for each unit
         output_dir: Directory to save results
@@ -468,6 +485,7 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
     lesion_results = {}
     
     # Get baseline decoding performance (all units active)
+    # unit_activations already contains only the concatenated lesioned units
     baseline_pred = decode_position_from_activations(unit_activations, xy_coords)
     baseline_error = compute_position_errors(xy_coords, baseline_pred)
     
@@ -480,6 +498,7 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
         print(f"Testing lesion of cluster {cluster_id}...")
         
         # Create lesioned activations (set cluster units to zero)
+        # cluster_mask identifies which of the lesioned units belong to this cluster
         cluster_mask = cluster_labels == cluster_id
         lesioned_activations = unit_activations.copy()
         lesioned_activations[:, cluster_mask] = 0
@@ -537,6 +556,13 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
 def decode_position_from_activations(activations, true_coords):
     """
     Simple linear decoder to predict positions from activations.
+    
+    Args:
+        activations: (n_samples, n_units) unit activations
+        true_coords: (n_samples, 2) ground truth x,y coordinates
+        
+    Returns:
+        pred_coords: (n_samples, 2) predicted x,y coordinates
     """
     from sklearn.linear_model import Ridge
     
@@ -557,6 +583,13 @@ def decode_position_from_activations(activations, true_coords):
 def compute_position_errors(true_coords, pred_coords):
     """
     Compute Euclidean distance errors between true and predicted coordinates.
+    
+    Args:
+        true_coords: (n_samples, 2) ground truth coordinates
+        pred_coords: (n_samples, 2) predicted coordinates
+        
+    Returns:
+        errors: (n_samples,) Euclidean distance errors
     """
     return np.sqrt(np.sum((true_coords - pred_coords)**2, axis=1))
 
@@ -725,10 +758,10 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
     Create 2D heatmaps showing activation as function of xy position.
     
     Args:
-        unit_activations: (n_samples, n_units) unit activations
+        unit_activations: (n_samples, n_lesioned_units) activations for lesioned units only
         xy_coords: (n_samples, 2) x,y coordinates  
-        allocentric_units: Original unit indices for labeling
-        unit_indices: Which units to visualize (default: first 16)
+        allocentric_units: Concatenated indices of lesioned units for labeling
+        unit_indices: Which units to visualize (indices into unit_activations, default: first 16)
         grid_resolution: Resolution for interpolated grid
         output_dir: Directory to save figures
         
@@ -765,6 +798,7 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
             im = axes[i].contourf(xi_grid, yi_grid, zi, levels=50, cmap='viridis')
             axes[i].set_xlabel('X coordinate')
             axes[i].set_ylabel('Y coordinate')
+            # allocentric_units[unit_idx] gives the original concatenated index for labeling
             axes[i].set_title(f'Unit {allocentric_units[unit_idx]}')
             plt.colorbar(im, ax=axes[i], shrink=0.8)
             
@@ -774,6 +808,7 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
                           c=unit_activations[:, unit_idx], cmap='viridis', alpha=0.6)
             axes[i].set_xlabel('X coordinate')
             axes[i].set_ylabel('Y coordinate')
+            # allocentric_units[unit_idx] gives the original concatenated index for labeling
             axes[i].set_title(f'Unit {allocentric_units[unit_idx]} (scatter)')
     
     # Hide unused subplots
@@ -795,10 +830,17 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
 def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
     """
     Publication-quality clustering analysis based on spatial tuning properties.
+    
+    Args:
+        unit_activations: (n_samples, n_lesioned_units) activations for lesioned units only
+        xy_coords: (n_samples, 2) x,y coordinates
+        allocentric_units: Concatenated indices of lesioned units for labeling
+        output_dir: Directory to save results
     """
     print("Performing clustering analysis...")
     
     # Extract spatial features for clustering
+    # unit_idx iterates through the lesioned units (0 to n_lesioned_units-1)
     features = []
     for unit_idx in range(unit_activations.shape[1]):
         activations = unit_activations[:, unit_idx]
@@ -823,8 +865,10 @@ def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, o
     features_pca = pca.fit_transform(StandardScaler().fit_transform(features_array))
     
     # Optimal k-means clustering with silhouette score
+    # Use number of available lesioned units for clustering range
     silhouette_scores = []
-    k_range = range(2, min(6, len(allocentric_units) // 2 + 1))
+    max_clusters = min(6, len(allocentric_units) // 2 + 1) 
+    k_range = range(2, max(3, max_clusters))  # Ensure at least k=2 is tested
     
     for k in k_range:
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
@@ -903,10 +947,10 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
     Visualize representative tuning curves for each cluster in publication quality.
     
     Args:
-        unit_activations: (n_samples, n_units) unit activations
+        unit_activations: (n_samples, n_lesioned_units) activations for lesioned units only
         xy_coords: (n_samples, 2) x,y coordinates
-        allocentric_units: Original unit indices
-        cluster_labels: Cluster assignment for each unit
+        allocentric_units: Concatenated indices of lesioned units for labeling
+        cluster_labels: Cluster assignment for each lesioned unit
         output_dir: Directory to save results
         
     Returns:
@@ -917,10 +961,11 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
     n_clusters = len(np.unique(cluster_labels))
     
     # Find representative unit for each cluster (most similar to centroid)
+    # cluster_units are indices into unit_activations (0 to n_lesioned_units-1)
     cluster_representatives = []
     for cluster_id in range(n_clusters):
         cluster_mask = cluster_labels == cluster_id
-        cluster_units = np.where(cluster_mask)[0]
+        cluster_units = np.where(cluster_mask)[0]  # indices into lesioned units
         
         if len(cluster_units) > 0:
             cluster_activations = unit_activations[:, cluster_mask]
@@ -986,6 +1031,7 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
             axes[cluster_id].set_ylabel('Y coordinate', fontweight='bold', fontsize=12)
             
             cluster_size = np.sum(cluster_labels == cluster_id)
+            # allocentric_units[rep_idx] gives the original concatenated index for labeling
             axes[cluster_id].set_title(f'Cluster {cluster_id} Representative\n'
                                      f'Unit {allocentric_units[rep_idx]} (n={cluster_size})', 
                                      fontweight='bold', fontsize=13, 
@@ -1044,14 +1090,17 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     # 2. Extract continuous tuning data for predefined lesioned units
     print("\n2. Extracting 2D tuning profiles for predefined lesioned units...")
+    # lesioned_units contains concatenated indices for proper activation extraction
     unit_activations, xy_coords = analyze_continuous_xy_tuning(
         trained_net, validation_set, lesioned_units, output_dir=output_dir
     )
+    print(f"Extracted activations for {len(lesioned_units)} lesioned units: {unit_activations.shape}")
     
     # 3. Spatial receptive fields visualization (predefined lesioned units)
     print("\n3. Plotting spatial receptive fields...")
+    # lesioned_units are concatenated indices, unit_activations contains only lesioned unit activations
     fig_receptive = plot_spatial_receptive_fields(
-        unit_activations, xy_coords, lesioned_units, n_units=len(lesioned_units), output_dir=output_dir
+        unit_activations, xy_coords, lesioned_units, n_units=min(9, len(lesioned_units)), output_dir=output_dir
     )
     
     # 4. Clustering analysis (predefined lesioned units)
@@ -1077,8 +1126,9 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     print("\n7. Saving results...")
     
     # Main results DataFrame
+    # lesioned_units contains concatenated indices for reference
     results_df = pd.DataFrame({
-        'unit_index': lesioned_units,
+        'concatenated_index': lesioned_units,  # Concatenated activation indices
         'cluster': cluster_labels
     })
     
@@ -1107,7 +1157,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     # Compile all results
     results = {
-        'lesioned_units': lesioned_units,
+        'lesioned_units': lesioned_units,  # These are concatenated activation indices
         'activations': unit_activations,
         'coordinates': xy_coords,
         'clusters': cluster_labels,
