@@ -16,6 +16,7 @@ import argparse
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.interpolate import griddata
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
@@ -26,11 +27,54 @@ import os
 import pickle
 import json
 
+# Set publication quality style
+sns.set_context('talk')
+plt.rcParams['svg.fonttype'] = 'none'  # Make text editable in SVG
+
 # Import existing infrastructure
 import RNN
 import functions
 from H5dataset import H5dataset
 import ClosedFormDecoding
+
+
+def process_lesion_map_like_rnn(pred_cells, verbose=True):
+    """
+    Process lesion map exactly like RNN.py setLesionMap() function.
+    
+    Args:
+        pred_cells: (2, n_units) array from regressionCoordinates
+        verbose: Print debug information
+        
+    Returns:
+        lesion_map: List of 4 arrays matching RNN.py format
+        allocentric_units: Combined unique unit indices
+    """
+    # Step 1: Take top 11 units (exact RNN.py replica)
+    lesion_map = pred_cells[:, -11:]
+    if verbose:
+        print(f"Lesion map shape after [:, -11:]: {lesion_map.shape}")
+    
+    # Step 2: Create 4-array structure (exact RNN.py replica)
+    lesion_map_list = [lesion_map.copy()[0], lesion_map.copy()[1], 
+                       lesion_map.copy()[0], lesion_map.copy()[1]]
+    
+    # Step 3: Process for 2-layer model (exact RNN.py replica)
+    # Assume 2048 units per layer based on RNN.py logic
+    for idx, elem in enumerate(lesion_map_list):
+        if idx > 1:  # Layer 2 processing
+            elem_filtered = elem[elem >= 2048]
+            lesion_map_list[idx] = elem_filtered - 2048
+        else:  # Layer 1 processing  
+            lesion_map_list[idx] = elem[elem < 2048]
+        
+        if verbose:
+            print(f"Lesion map[{idx}] (layer {1 if idx <= 1 else 2}): {lesion_map_list[idx]}")
+    
+    # Get combined unique units for analysis
+    allocentric_units = np.unique(np.concatenate([lesion_map[0], lesion_map[1]]))
+    
+    return lesion_map_list, allocentric_units
 
 
 def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_recompute=False):
@@ -53,6 +97,12 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         print(f"Loading cached xy units from {cache_path}")
         with open(cache_path, 'rb') as f:
             cache_data = pickle.load(f)
+        # Check if lesion_map_list exists in cache (backward compatibility)
+        if 'lesion_map_list' in cache_data:
+            print("Cache contains full lesion map data")
+        else:
+            print("Cache missing lesion map - will recompute for full consistency")
+            # Could force recompute here if needed
         return cache_data['allocentric_units'], cache_data['reg_weights'], cache_data['test_score']
     
     print("Identifying allocentric coding units (this may take a while)...")
@@ -62,11 +112,8 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
     )
     
-    # Get top units for xy decoding (combine x and y predictive units)
-    n_top_units = min(50, pred_cells.shape[1] // 2)
-    top_x_units = pred_cells[0, -n_top_units:]
-    top_y_units = pred_cells[1, -n_top_units:]
-    allocentric_units = np.unique(np.concatenate([top_x_units, top_y_units]))
+    # Process lesion map exactly like RNN.py for perfect consistency
+    lesion_map_list, allocentric_units = process_lesion_map_like_rnn(pred_cells, verbose=True)
     
     print(f"Identified {len(allocentric_units)} top allocentric units")
     print(f"X-coordinate decoding R²: {test_score}")
@@ -79,6 +126,7 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         'reg_weights': reg_weights,
         'test_score': test_score,
         'pred_cells': pred_cells,
+        'lesion_map_list': lesion_map_list,
         'model_info': {
             'model_title': net.title if hasattr(net, 'title') else 'unknown',
             'n_units': len(allocentric_units),
@@ -174,27 +222,40 @@ def analyze_continuous_xy_tuning(net, dataset, allocentric_units, output_dir='./
 def plot_spatial_receptive_fields(unit_activations, xy_coords, allocentric_units, 
                                   n_units=9, output_dir='./results'):
     """
-    Plot simple spatial receptive fields for top units - basic visualization first.
+    Plot publication-quality spatial receptive fields for top units.
     """
     print(f"Creating spatial receptive field plots for {n_units} units...")
     
     # Select units to visualize
     unit_indices = np.linspace(0, len(allocentric_units)-1, n_units).astype(int)
     
-    fig, axes = plt.subplots(3, 3, figsize=(12, 12))
+    fig, axes = plt.subplots(3, 3, figsize=(15, 15))
     axes = axes.flatten()
     
+    # Color palette following paper style
+    cmap = 'viridis'
+    
     for i, unit_idx in enumerate(unit_indices):
-        # Simple scatter plot - let the data speak first
+        # High-quality scatter plot with better styling
         scatter = axes[i].scatter(xy_coords[:, 0], xy_coords[:, 1], 
                                 c=unit_activations[:, unit_idx], 
-                                cmap='viridis', alpha=0.6, s=1)
+                                cmap=cmap, alpha=0.7, s=2, edgecolors='none')
         
-        axes[i].set_xlabel('X coordinate')
-        axes[i].set_ylabel('Y coordinate')
-        axes[i].set_title(f'Unit {allocentric_units[unit_idx]}')
-        plt.colorbar(scatter, ax=axes[i], shrink=0.8)
+        axes[i].set_xlabel('X coordinate', fontweight='bold')
+        axes[i].set_ylabel('Y coordinate', fontweight='bold')
+        axes[i].set_title(f'Unit {allocentric_units[unit_idx]}', 
+                         fontweight='bold', fontsize=14)
+        
+        # Style colorbar
+        cbar = plt.colorbar(scatter, ax=axes[i], shrink=0.8)
+        cbar.set_label('Activation', fontweight='bold', rotation=270, labelpad=15)
+        
+        # Clean up axes
+        sns.despine(ax=axes[i])
+        axes[i].tick_params(axis='both', which='major', labelsize=10)
     
+    fig.suptitle('Spatial Receptive Fields of Allocentric Units', 
+                fontsize=18, fontweight='bold', y=0.95)
     plt.tight_layout()
     
     # Save figure
@@ -267,7 +328,7 @@ def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, x
               f"error increase: {cluster_errors[cluster_id]['error_increase']:.4f}")
     
     # Create polar plots of systematic errors
-    create_error_polar_plots(cluster_errors, output_dir)
+    fig_polar_count, fig_polar_amplitude = create_error_polar_plots(cluster_errors, output_dir)
     
     # Save lesion results
     lesion_summary = []
@@ -361,17 +422,36 @@ def analyze_systematic_errors(error_vectors):
 
 def create_error_polar_plots(cluster_errors, output_dir):
     """
-    Create polar plots showing systematic error directions for each cluster lesion.
+    Create publication-quality polar plots showing systematic error directions for each cluster lesion.
+    Creates both count-based and amplitude-weighted plots.
     """
     n_clusters = len(cluster_errors)
-    n_cols = min(3, n_clusters)
+    n_cols = min(4, n_clusters)
     n_rows = int(np.ceil(n_clusters / n_cols))
     
-    fig = plt.figure(figsize=(5*n_cols, 5*n_rows))
+    # Create two figures: one for error counts, one for amplitude-weighted
+    fig1, axes1 = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), 
+                               subplot_kw=dict(projection='polar'))
+    fig2, axes2 = plt.subplots(n_rows, n_cols, figsize=(4*n_cols, 4*n_rows), 
+                               subplot_kw=dict(projection='polar'))
+    
+    if n_clusters == 1:
+        axes1 = [axes1]
+        axes2 = [axes2]
+    elif n_rows == 1:
+        axes1 = axes1.flatten()
+        axes2 = axes2.flatten()
+    else:
+        axes1 = axes1.flatten()
+        axes2 = axes2.flatten()
+    
+    # Color palette for consistency with paper style
+    colors = sns.color_palette('Set2', n_clusters)
     
     for i, (cluster_id, results) in enumerate(cluster_errors.items()):
-        ax = fig.add_subplot(n_rows, n_cols, i+1, projection='polar')
-        
+        if i >= len(axes1):
+            break
+            
         error_vectors = results['error_vectors']
         dx, dy = error_vectors[:, 0], error_vectors[:, 1]
         
@@ -379,33 +459,69 @@ def create_error_polar_plots(cluster_errors, output_dir):
         error_angles = np.arctan2(dy, dx)
         error_magnitudes = np.sqrt(dx**2 + dy**2)
         
-        # Create histogram of error directions
+        # Create bins for histograms
         angle_bins = np.linspace(-np.pi, np.pi, 25)
-        hist, bin_edges = np.histogram(error_angles, bins=angle_bins)
+        bin_centers = (angle_bins[:-1] + angle_bins[1:]) / 2
+        bin_width = np.diff(angle_bins)[0]
         
-        # Plot as polar histogram
-        theta = (bin_edges[:-1] + bin_edges[1:]) / 2
-        ax.bar(theta, hist, width=np.diff(bin_edges)[0], alpha=0.7)
+        # Plot 1: Error count histogram
+        hist_counts, _ = np.histogram(error_angles, bins=angle_bins)
+        bars1 = axes1[i].bar(bin_centers, hist_counts, width=bin_width, 
+                            color=colors[i], alpha=0.7, edgecolor='black', linewidth=0.5)
         
-        # Add systematic bias vector
+        # Plot 2: Amplitude-weighted histogram  
+        hist_weighted = np.zeros(len(bin_centers))
+        for j, (angle, magnitude) in enumerate(zip(error_angles, error_magnitudes)):
+            bin_idx = np.digitize(angle, angle_bins) - 1
+            if 0 <= bin_idx < len(hist_weighted):
+                hist_weighted[bin_idx] += magnitude
+        
+        bars2 = axes2[i].bar(bin_centers, hist_weighted, width=bin_width,
+                            color=colors[i], alpha=0.7, edgecolor='black', linewidth=0.5)
+        
+        # Add systematic bias arrows
         sys_analysis = results['systematic_analysis']
-        if sys_analysis['concentration'] > 0.1:  # Only show if concentrated
-            ax.arrow(sys_analysis['preferred_direction'], 0, 0, max(hist) * 0.8,
-                    head_width=0.2, head_length=max(hist)*0.1, fc='red', ec='red', linewidth=2)
+        if sys_analysis['concentration'] > 0.1:
+            # Arrow for count plot
+            arrow_length1 = max(hist_counts) * 0.6 if max(hist_counts) > 0 else 1
+            axes1[i].arrow(sys_analysis['preferred_direction'], 0, 0, arrow_length1,
+                          head_width=0.15, head_length=arrow_length1*0.1, 
+                          fc='red', ec='red', linewidth=2, alpha=0.8)
+            
+            # Arrow for amplitude plot
+            arrow_length2 = max(hist_weighted) * 0.6 if max(hist_weighted) > 0 else 1
+            axes2[i].arrow(sys_analysis['preferred_direction'], 0, 0, arrow_length2,
+                          head_width=0.15, head_length=arrow_length2*0.1,
+                          fc='red', ec='red', linewidth=2, alpha=0.8)
         
-        ax.set_title(f'Cluster {cluster_id} Lesion\nError Direction Distribution\n'
-                    f'({results["lesioned_units"]} units)', pad=20)
-        ax.set_ylabel('Error Count', labelpad=30)
+        # Style axes
+        for ax, title_suffix in [(axes1[i], 'Error Count'), (axes2[i], 'Amplitude-Weighted')]:
+            ax.set_title(f'Cluster {cluster_id}\n{title_suffix}\n({results["lesioned_units"]} units)', 
+                        fontweight='bold', pad=20, fontsize=12)
+            ax.grid(True, alpha=0.3)
+            ax.set_theta_zero_location('E')  # 0° at East
+            ax.set_theta_direction(1)  # Counterclockwise
     
-    plt.tight_layout()
+    # Hide unused subplots
+    for i in range(n_clusters, len(axes1)):
+        axes1[i].set_visible(False)
+        axes2[i].set_visible(False)
     
-    # Save figure
-    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.png'), 
-                dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.svg'), 
-                bbox_inches='tight')
+    # Style and save figures
+    for fig, name_suffix in [(fig1, 'count'), (fig2, 'amplitude')]:
+        fig.suptitle(f'Systematic Error Analysis - {name_suffix.title()}', 
+                    fontsize=16, fontweight='bold', y=0.95)
+        plt.tight_layout()
+        
+        # Remove spines for cleaner look (following paper style)
+        
+        # Save figures
+        fig.savefig(os.path.join(output_dir, f'lesion_error_polar_{name_suffix}.png'), 
+                   dpi=300, bbox_inches='tight')
+        fig.savefig(os.path.join(output_dir, f'lesion_error_polar_{name_suffix}.svg'), 
+                   bbox_inches='tight')
     
-    return fig
+    return fig1, fig2
 
 
 def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units, 
@@ -484,16 +600,16 @@ def visualize_2d_tuning_curves(unit_activations, xy_coords, allocentric_units,
 
 def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
     """
-    Simple clustering analysis based on spatial tuning properties.
+    Publication-quality clustering analysis based on spatial tuning properties.
     """
-    print("Performing simple clustering analysis...")
+    print("Performing clustering analysis...")
     
-    # Just use basic spatial features for clustering
+    # Extract spatial features for clustering
     features = []
     for unit_idx in range(unit_activations.shape[1]):
         activations = unit_activations[:, unit_idx]
         
-        # Simple features: center of mass and correlations
+        # Spatial features: center of mass and correlations
         com_x = np.average(xy_coords[:, 0], weights=activations + 1e-10)
         com_y = np.average(xy_coords[:, 1], weights=activations + 1e-10)
         
@@ -508,18 +624,18 @@ def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, o
     features_array = np.array(features)
     features_array = np.nan_to_num(features_array)
     
-    # Simple PCA visualization
+    # PCA for dimensionality reduction
     pca = PCA(n_components=2)
     features_pca = pca.fit_transform(StandardScaler().fit_transform(features_array))
     
-    # Simple k-means clustering
+    # Optimal k-means clustering with silhouette score
     silhouette_scores = []
-    k_range = range(2, min(8, len(allocentric_units) // 3))
+    k_range = range(2, min(6, len(allocentric_units) // 2 + 1))
     
     for k in k_range:
         kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
         labels = kmeans.fit_predict(features_pca)
-        if len(set(labels)) > 1:  # Need at least 2 clusters for silhouette score
+        if len(set(labels)) > 1:
             score = silhouette_score(features_pca, labels)
             silhouette_scores.append(score)
         else:
@@ -533,41 +649,64 @@ def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, o
         optimal_k = 2
         cluster_labels = np.zeros(len(allocentric_units))
     
-    # Simple visualization
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    # Publication-quality visualization
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    
+    # Color palette following paper style
+    cluster_colors = sns.color_palette('Set2', optimal_k)
     
     # PCA plot with clusters
-    scatter = ax1.scatter(features_pca[:, 0], features_pca[:, 1], 
-                         c=cluster_labels, cmap='tab10', alpha=0.7)
-    ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} var)')
-    ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} var)')
-    ax1.set_title('Unit Clustering (PCA space)')
+    for cluster_id in range(optimal_k):
+        mask = cluster_labels == cluster_id
+        ax1.scatter(features_pca[mask, 0], features_pca[mask, 1], 
+                   c=[cluster_colors[cluster_id]], alpha=0.8, s=80, 
+                   edgecolors='black', linewidth=1, 
+                   label=f'Cluster {cluster_id} (n={np.sum(mask)})')
+    
+    ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.1%} variance explained)', 
+                  fontweight='bold', fontsize=12)
+    ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.1%} variance explained)', 
+                  fontweight='bold', fontsize=12)
+    ax1.set_title('Unit Clustering in PCA Space', fontweight='bold', fontsize=14)
+    ax1.legend(frameon=False, fontsize=10)
+    ax1.grid(True, alpha=0.3)
+    sns.despine(ax=ax1)
     
     # Feature space (x vs y correlation)
-    scatter2 = ax2.scatter(features_array[:, 2], features_array[:, 3], 
-                          c=cluster_labels, cmap='tab10', alpha=0.7)
-    ax2.set_xlabel('X Correlation')
-    ax2.set_ylabel('Y Correlation')
-    ax2.set_title('X vs Y Correlation Preferences')
-    ax2.axhline(0, color='k', linestyle='--', alpha=0.3)
-    ax2.axvline(0, color='k', linestyle='--', alpha=0.3)
+    for cluster_id in range(optimal_k):
+        mask = cluster_labels == cluster_id
+        ax2.scatter(features_array[mask, 2], features_array[mask, 3], 
+                   c=[cluster_colors[cluster_id]], alpha=0.8, s=80,
+                   edgecolors='black', linewidth=1,
+                   label=f'Cluster {cluster_id} (n={np.sum(mask)})')
     
+    ax2.set_xlabel('X-coordinate Correlation', fontweight='bold', fontsize=12)
+    ax2.set_ylabel('Y-coordinate Correlation', fontweight='bold', fontsize=12)
+    ax2.set_title('Spatial Correlation Preferences', fontweight='bold', fontsize=14)
+    ax2.axhline(0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+    ax2.axvline(0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+    ax2.legend(frameon=False, fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    sns.despine(ax=ax2)
+    
+    fig.suptitle(f'Allocentric Unit Clustering Analysis (k={optimal_k})', 
+                fontsize=16, fontweight='bold', y=0.95)
     plt.tight_layout()
     
-    # Save
-    fig.savefig(os.path.join(output_dir, 'simple_clustering.png'), 
+    # Save figures
+    fig.savefig(os.path.join(output_dir, 'clustering_analysis.png'), 
                 dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'simple_clustering.svg'), 
+    fig.savefig(os.path.join(output_dir, 'clustering_analysis.svg'), 
                 bbox_inches='tight')
     
-    print(f"Found {optimal_k} clusters")
+    print(f"Found {optimal_k} optimal clusters")
     return cluster_labels, optimal_k, fig
 
 
 def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units, 
                                 cluster_labels, output_dir='./results'):
     """
-    Visualize representative tuning curves for each cluster.
+    Visualize representative tuning curves for each cluster in publication quality.
     
     Args:
         unit_activations: (n_samples, n_units) unit activations
@@ -583,18 +722,16 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
     
     n_clusters = len(np.unique(cluster_labels))
     
-    # For each cluster, find the unit closest to cluster center
+    # Find representative unit for each cluster (most similar to centroid)
     cluster_representatives = []
     for cluster_id in range(n_clusters):
         cluster_mask = cluster_labels == cluster_id
         cluster_units = np.where(cluster_mask)[0]
         
         if len(cluster_units) > 0:
-            # Find unit closest to cluster centroid (in feature space)
             cluster_activations = unit_activations[:, cluster_mask]
             cluster_centroid = np.mean(cluster_activations, axis=1)
             
-            # Find unit most similar to centroid
             similarities = []
             for unit_idx in cluster_units:
                 similarity = np.corrcoef(unit_activations[:, unit_idx], cluster_centroid)[0, 1]
@@ -603,52 +740,80 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
             representative_idx = cluster_units[np.argmax(similarities)]
             cluster_representatives.append(representative_idx)
         else:
-            cluster_representatives.append(0)  # Fallback
+            cluster_representatives.append(0)
     
-    # Create visualization
-    fig, axes = plt.subplots(2, int(np.ceil(n_clusters/2)), figsize=(16, 8))
-    if n_clusters <= 2:
-        axes = axes.reshape(-1)
+    # Create publication-quality visualization
+    n_cols = min(4, n_clusters)
+    n_rows = int(np.ceil(n_clusters / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 5*n_rows))
+    
+    if n_clusters == 1:
+        axes = [axes]
+    elif n_rows == 1:
+        axes = axes if n_clusters > 1 else [axes]
     else:
         axes = axes.flatten()
     
-    # Create interpolation grid
+    # Color palette for consistency
+    cluster_colors = sns.color_palette('Set2', n_clusters)
+    
+    # Create high-resolution interpolation grid
     x_min, x_max = xy_coords[:, 0].min(), xy_coords[:, 0].max()
     y_min, y_max = xy_coords[:, 1].min(), xy_coords[:, 1].max()
-    xi = np.linspace(x_min, x_max, 50)
-    yi = np.linspace(y_min, y_max, 50)
+    xi = np.linspace(x_min, x_max, 80)
+    yi = np.linspace(y_min, y_max, 80)
     xi_grid, yi_grid = np.meshgrid(xi, yi)
     
     for cluster_id, rep_idx in enumerate(cluster_representatives):
         if cluster_id < len(axes):
             try:
+                # High-quality interpolation
                 zi = griddata(xy_coords, unit_activations[:, rep_idx], 
                              (xi_grid, yi_grid), method='cubic', fill_value=0)
                 
-                im = axes[cluster_id].contourf(xi_grid, yi_grid, zi, levels=30, cmap='viridis')
-                axes[cluster_id].set_xlabel('X coordinate')
-                axes[cluster_id].set_ylabel('Y coordinate')
+                # Smooth contour plot with better styling
+                im = axes[cluster_id].contourf(xi_grid, yi_grid, zi, levels=40, 
+                                             cmap='viridis', alpha=0.9)
                 
-                cluster_size = np.sum(cluster_labels == cluster_id)
-                axes[cluster_id].set_title(f'Cluster {cluster_id} (n={cluster_size})\nUnit {allocentric_units[rep_idx]}')
-                plt.colorbar(im, ax=axes[cluster_id], shrink=0.8)
+                # Add contour lines for better definition
+                axes[cluster_id].contour(xi_grid, yi_grid, zi, levels=10, 
+                                       colors='black', alpha=0.3, linewidths=0.5)
                 
-            except:
-                # Fallback to scatter plot
-                axes[cluster_id].scatter(xy_coords[:, 0], xy_coords[:, 1], 
-                                       c=unit_activations[:, rep_idx], cmap='viridis', alpha=0.6)
-                axes[cluster_id].set_xlabel('X coordinate')
-                axes[cluster_id].set_ylabel('Y coordinate')
-                cluster_size = np.sum(cluster_labels == cluster_id)
-                axes[cluster_id].set_title(f'Cluster {cluster_id} (n={cluster_size})\nUnit {allocentric_units[rep_idx]}')
+            except Exception as e:
+                print(f"Interpolation failed for cluster {cluster_id}: {e}")
+                # High-quality scatter fallback
+                im = axes[cluster_id].scatter(xy_coords[:, 0], xy_coords[:, 1], 
+                                            c=unit_activations[:, rep_idx], 
+                                            cmap='viridis', alpha=0.8, s=3, 
+                                            edgecolors='none')
+            
+            # Styling
+            axes[cluster_id].set_xlabel('X coordinate', fontweight='bold', fontsize=12)
+            axes[cluster_id].set_ylabel('Y coordinate', fontweight='bold', fontsize=12)
+            
+            cluster_size = np.sum(cluster_labels == cluster_id)
+            axes[cluster_id].set_title(f'Cluster {cluster_id} Representative\n'
+                                     f'Unit {allocentric_units[rep_idx]} (n={cluster_size})', 
+                                     fontweight='bold', fontsize=13, 
+                                     color=cluster_colors[cluster_id])
+            
+            # Style colorbar
+            cbar = plt.colorbar(im, ax=axes[cluster_id], shrink=0.8)
+            cbar.set_label('Activation', fontweight='bold', rotation=270, labelpad=15)
+            
+            # Clean axes
+            sns.despine(ax=axes[cluster_id])
+            axes[cluster_id].tick_params(axis='both', which='major', labelsize=10)
     
     # Hide unused subplots
     for i in range(n_clusters, len(axes)):
         axes[i].set_visible(False)
     
+    fig.suptitle('Cluster Representative Spatial Tuning Curves', 
+                fontsize=18, fontweight='bold', y=0.95)
     plt.tight_layout()
     
-    # Save figure
+    # Save figures
     fig.savefig(os.path.join(output_dir, 'cluster_representatives.png'), 
                 dpi=300, bbox_inches='tight')
     fig.savefig(os.path.join(output_dir, 'cluster_representatives.svg'), 
@@ -707,7 +872,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         unit_activations, xy_coords, allocentric_units, cluster_labels, output_dir=output_dir
     )
     
-    # 6. Perform targeted cluster lesions
+    # 6. Perform targeted cluster lesions with publication-quality polar plots
     print("\n6. Performing targeted cluster lesions...")
     lesion_results = perform_cluster_lesions(
         trained_net, validation_set, allocentric_units, unit_activations, 
@@ -861,14 +1026,15 @@ def main():
         print("="*60)
         print(f"Results saved to: {args.output_dir}")
         print("\nGenerated files:")
-        print("- spatial_receptive_fields.png/svg: Basic scatter plots of unit responses")
-        print("- simple_clustering.png/svg: PCA and correlation-based clustering")
-        print("- cluster_representatives.png/svg: Representative units for each cluster")
-        print("- lesion_error_polar_plots.png/svg: Systematic error analysis from cluster lesions")
+        print("- spatial_receptive_fields.png/svg: Publication-quality spatial receptive fields")
+        print("- clustering_analysis.png/svg: PCA and correlation-based clustering analysis")
+        print("- cluster_representatives.png/svg: Representative tuning curves for each cluster")
+        print("- lesion_error_polar_count.png/svg: Error count polar plots for cluster lesions")
+        print("- lesion_error_polar_amplitude.png/svg: Amplitude-weighted error polar plots")
         print("- allocentric_units_analysis.csv: Unit indices and cluster assignments")
         print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
         print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
-        print("- cached_xy_units.pkl: Cached allocentric unit identifications")
+        print("- cached_xy_units.pkl: Cached allocentric unit identifications (top 11)")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
     except Exception as e:
