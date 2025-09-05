@@ -38,6 +38,67 @@ from H5dataset import H5dataset
 import ClosedFormDecoding
 
 
+def select_top_regression_units_separate_xy(reg_weights, percentage=0.05, verbose=True):
+    """
+    Select top units based on regression coefficient strength for X and Y coordinates separately.
+    
+    Args:
+        reg_weights: Regression coefficients from ClosedFormDecoding (2, n_units) - x and y coefficients
+        percentage: Percentage of top units to select for each coordinate (default: 0.05 for 0.05%)
+        verbose: Print debug information
+        
+    Returns:
+        x_units: Array of unit indices with strongest X-coordinate coefficients
+        y_units: Array of unit indices with strongest Y-coordinate coefficients
+        combined_units: Array of unique units from both X and Y selections
+        x_strengths: X-coordinate regression strengths for all units
+        y_strengths: Y-coordinate regression strengths for all units
+    """
+    if verbose:
+        print(f"Selecting top {percentage}% units for X and Y coordinates separately")
+        print(f"Regression weights shape: {reg_weights.shape}")
+    
+    # Get absolute coefficients for each coordinate
+    x_coeffs = np.abs(reg_weights[0])  # X-coordinate coefficients  
+    y_coeffs = np.abs(reg_weights[1])  # Y-coordinate coefficients
+    
+    # Calculate number of units to select for each coordinate
+    n_units = len(x_coeffs)
+    n_select = max(1, int(n_units * (percentage / 100)))  # Ensure at least 1 unit
+    
+    # Select top units for X coordinate
+    x_selected_indices = np.argsort(x_coeffs)[-n_select:][::-1]  # Descending order
+    x_selected_strengths = x_coeffs[x_selected_indices]
+    
+    # Select top units for Y coordinate  
+    y_selected_indices = np.argsort(y_coeffs)[-n_select:][::-1]  # Descending order
+    y_selected_strengths = y_coeffs[y_selected_indices]
+    
+    # Combine unique units
+    combined_units = np.unique(np.concatenate([x_selected_indices, y_selected_indices]))
+    
+    # Calculate overlap
+    overlap_units = np.intersect1d(x_selected_indices, y_selected_indices)
+    
+    if verbose:
+        print(f"Total units available: {n_units}")
+        print(f"Units selected per coordinate: {n_select} ({n_select/n_units*100:.3f}%)")
+        print(f"X-coordinate units: {x_selected_indices}")
+        print(f"Y-coordinate units: {y_selected_indices}")
+        print(f"Overlapping units: {len(overlap_units)} units: {overlap_units}")
+        print(f"Total unique units: {len(combined_units)} units")
+        print(f"X-strength range: {x_selected_strengths.min():.4f} - {x_selected_strengths.max():.4f}")
+        print(f"Y-strength range: {y_selected_strengths.min():.4f} - {y_selected_strengths.max():.4f}")
+    
+    # Verification
+    actual_percentage = (n_select / n_units) * 100
+    if verbose:
+        print(f"Verification: Selected {n_select}/{n_units} per coordinate = {actual_percentage:.3f}%")
+        print(f"Target: {percentage}%, Actual: {actual_percentage:.3f}%, Difference: {abs(percentage - actual_percentage):.3f}%")
+    
+    return x_selected_indices, y_selected_indices, combined_units, x_coeffs, y_coeffs
+
+
 def process_lesion_map_like_rnn(pred_cells, verbose=True):
     """
     Process lesion map exactly like RNN.py setLesionMap() function.
@@ -97,16 +158,21 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         print(f"Loading cached xy units from {cache_path}")
         with open(cache_path, 'rb') as f:
             cache_data = pickle.load(f)
-        # Check if lesion_map_list exists in cache (backward compatibility)
-        if 'lesion_map_list' in cache_data:
-            print("Cache contains full lesion map data")
+        # Only use cache if it contains the new separate X/Y selection method
+        selection_method = cache_data.get('selection_method', 'unknown')
+        if selection_method == 'regression_coefficient_separate_xy_0.05pct':
+            print("Cache contains separate X/Y regression-coefficient selection (0.05% each)")
+            if 'model_info' in cache_data:
+                info = cache_data['model_info']
+                print(f"  - X units: {info.get('n_x_units', 'unknown')}")
+                print(f"  - Y units: {info.get('n_y_units', 'unknown')}")
+                print(f"  - Overlap: {info.get('n_overlap_units', 'unknown')}")
+            # Return cached results
+            all_lesioned_units = cache_data['all_lesioned_units']
+            return all_lesioned_units, cache_data['reg_weights'], cache_data['test_score']
         else:
-            print("Cache missing lesion map - will recompute for full consistency")
-            # Could force recompute here if needed
-        # Return all lesioned units if available, otherwise fall back to old format
-        all_lesioned_units = cache_data.get('all_lesioned_units', 
-                                          cache_data.get('lesioned_units', cache_data['allocentric_units']))
-        return all_lesioned_units, cache_data['reg_weights'], cache_data['test_score']
+            print(f"Cache contains old selection method ({selection_method}) - ignoring and recomputing")
+            print("Will use new separate X/Y regression-coefficient selection")
     
     print("Identifying allocentric coding units (this may take a while)...")
     
@@ -115,23 +181,35 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
     )
     
-    # Process lesion map exactly like RNN.py for perfect consistency
-    lesion_map_list, all_allocentric_units = process_lesion_map_like_rnn(pred_cells, verbose=True)
+    # Select top 0.05% units for X and Y coordinates separately
+    x_units, y_units, combined_units, x_strengths, y_strengths = select_top_regression_units_separate_xy(
+        reg_weights, percentage=0.05, verbose=True)
     
-    # Get ALL units that actually get lesioned in RNN experiments (both layers)
+    # Create lesion map using separate X and Y units (matching RNN structure)
+    pseudo_pred_cells = np.array([x_units, y_units])  # Separate X and Y unit selections
+    lesion_map_list, _ = process_lesion_map_like_rnn(pseudo_pred_cells, verbose=True)
+    
+    # Get ALL units that will be lesioned (both layers)
     lesioned_layer1, lesioned_layer2, all_lesioned_units = get_rnn_lesioned_units_both_layers(lesion_map_list, verbose=True)
     
-    print(f"Total allocentric units identified: {len(all_allocentric_units)}")
-    print(f"Units actually lesioned in RNN: {len(all_lesioned_units)}")
+    print(f"Top 0.05% units selected separately:")
+    print(f"  - X-coordinate: {len(x_units)} units")
+    print(f"  - Y-coordinate: {len(y_units)} units")  
+    print(f"  - Combined unique: {len(combined_units)} units")
+    print(f"Units actually lesioned (both layers): {len(all_lesioned_units)}")
     print(f"  - Layer 1: {len(lesioned_layer1)} units")
     print(f"  - Layer 2: {len(lesioned_layer2)} units")
     print(f"X-coordinate decoding R²: {test_score}")
     
     # Cache the results
-    print(f"Caching xy units to {cache_path}")
+    print(f"Caching regression-selected units to {cache_path}")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     cache_data = {
-        'allocentric_units': all_allocentric_units,  # All identified units
+        'x_regression_units': x_units,             # Top 0.05% X-coordinate units
+        'y_regression_units': y_units,             # Top 0.05% Y-coordinate units
+        'combined_regression_units': combined_units, # Combined unique units
+        'x_strengths': x_strengths,                # All X regression strengths
+        'y_strengths': y_strengths,                # All Y regression strengths
         'lesioned_units_layer1': lesioned_layer1,   # Layer 1 lesioned units
         'lesioned_units_layer2': lesioned_layer2,   # Layer 2 lesioned units  
         'all_lesioned_units': all_lesioned_units,   # Combined lesioned units
@@ -139,13 +217,18 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         'test_score': test_score,
         'pred_cells': pred_cells,
         'lesion_map_list': lesion_map_list,
+        'selection_method': 'regression_coefficient_separate_xy_0.05pct',
         'model_info': {
             'model_title': net.title if hasattr(net, 'title') else 'unknown',
-            'n_total_units': len(all_allocentric_units),
+            'n_x_units': len(x_units),
+            'n_y_units': len(y_units),
+            'n_combined_units': len(combined_units),
+            'n_overlap_units': len(np.intersect1d(x_units, y_units)),
             'n_lesioned_layer1': len(lesioned_layer1),
             'n_lesioned_layer2': len(lesioned_layer2),
             'n_all_lesioned': len(all_lesioned_units),
-            'decoding_score': test_score
+            'decoding_score': test_score,
+            'selection_percentage': 0.05
         }
     }
     with open(cache_path, 'wb') as f:
@@ -913,11 +996,11 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         results: Dictionary containing analysis results
     """
     print("="*60)
-    print("STREAMLINED ALLOCENTRIC ANALYSIS WITH LESION STUDIES")
+    print("ALLOCENTRIC ANALYSIS: TOP 0.05% X/Y REGRESSION UNITS (SEPARATE)")
     print("="*60)
     
-    # 1. Load or identify RNN-lesioned units (with caching)
-    print("\n1. Loading/identifying RNN-lesioned allocentric units...")
+    # 1. Load or identify top regression units (with caching)
+    print("\n1. Loading/identifying top 0.05% X and Y regression units separately...")
     xy_units_cache_path = os.path.join(output_dir, "cached_xy_units.pkl")
     lesioned_units, reg_weights, test_score = load_or_store_xy_units(
         trained_net, train_set, validation_set, xy_units_cache_path, force_recompute
@@ -1001,7 +1084,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     }
     
     print(f"\nAnalysis complete! Results saved to: {output_dir}")
-    print(f"- Analyzed {len(lesioned_units)} RNN-lesioned allocentric units")
+    print(f"- Analyzed {len(lesioned_units)} units from top 0.05% by regression strength")
     print(f"- Identified {optimal_k} distinct clusters")
     print(f"- Decoding performance: R² = {test_score:.4f}")
     
@@ -1106,10 +1189,10 @@ def main():
         print("- cluster_representatives.png/svg: Representative tuning curves for each cluster")
         print("- lesion_error_polar_count.png/svg: Error count histograms for cluster lesions")
         print("- lesion_error_polar_scatter.png/svg: Error amplitude polar scatter plots")
-        print("- lesioned_units_analysis.csv: RNN-lesioned unit indices and cluster assignments")
+        print("- lesioned_units_analysis.csv: Top 0.05% regression units and cluster assignments")
         print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
         print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
-        print("- cached_xy_units.pkl: Cached RNN-lesioned unit identifications")
+        print("- cached_xy_units.pkl: Cached top 0.05% regression-coefficient units")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
     except Exception as e:
