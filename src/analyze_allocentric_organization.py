@@ -38,6 +38,56 @@ from H5dataset import H5dataset
 import ClosedFormDecoding
 
 
+def lesion_specific_units(verbose=True):
+    """
+    Lesion specific predefined units based on your provided list.
+    
+    Args:
+        verbose: Print debug information
+        
+    Returns:
+        lesioned_units_dict: Dictionary with layer-specific unit lists
+        all_lesioned_units: Combined array of all units to be lesioned
+        layer_assignments: Dictionary mapping units to layers
+    """
+    # Predefined lesioned units (matching your specification)
+    lesioned_units = {
+        1: [363, 262, 1319, 578, 208, 266, 1840, 262],
+        2: [1900, 787, 488, 839, 107, 820, 981, 1900, 3, 1510, 403, 2033, 251, 1345]
+    }
+    
+    if verbose:
+        print("Using predefined lesioned units:")
+        print(f"Layer 1 units: {lesioned_units[1]}")
+        print(f"Layer 2 units: {lesioned_units[2]}")
+    
+    # Create weights-like structure for layer assignment
+    all_units = []
+    layer_assignments = {}
+    
+    # Process Layer 1 units (< 2048)
+    for unit in lesioned_units[1]:
+        all_units.append(unit)
+        layer_assignments[unit] = 1
+    
+    # Process Layer 2 units (add 2048 for global indexing)
+    layer2_global_units = [unit + 2048 for unit in lesioned_units[2]]
+    for orig_unit, global_unit in zip(lesioned_units[2], layer2_global_units):
+        all_units.append(global_unit)
+        layer_assignments[global_unit] = 2
+    
+    all_lesioned_units = np.array(all_units)
+    
+    if verbose:
+        print(f"Layer 1 units (< 2048): {lesioned_units[1]}")
+        print(f"Layer 2 units (original): {lesioned_units[2]}")
+        print(f"Layer 2 units (global): {layer2_global_units}")
+        print(f"Total units to lesion: {len(all_lesioned_units)}")
+        print(f"All lesioned unit indices: {all_lesioned_units}")
+    
+    return lesioned_units, all_lesioned_units, layer_assignments
+
+
 def select_top_regression_units_separate_xy(reg_weights, percentage=0.05, verbose=True):
     """
     Select top units based on regression coefficient strength for X and Y coordinates separately.
@@ -158,21 +208,21 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         print(f"Loading cached xy units from {cache_path}")
         with open(cache_path, 'rb') as f:
             cache_data = pickle.load(f)
-        # Only use cache if it contains the new separate X/Y selection method
+        # Only use cache if it contains the predefined specific units method
         selection_method = cache_data.get('selection_method', 'unknown')
-        if selection_method == 'regression_coefficient_separate_xy_0.05pct':
-            print("Cache contains separate X/Y regression-coefficient selection (0.05% each)")
+        if selection_method == 'predefined_specific_units':
+            print("Cache contains predefined specific lesioned units")
             if 'model_info' in cache_data:
                 info = cache_data['model_info']
-                print(f"  - X units: {info.get('n_x_units', 'unknown')}")
-                print(f"  - Y units: {info.get('n_y_units', 'unknown')}")
-                print(f"  - Overlap: {info.get('n_overlap_units', 'unknown')}")
+                print(f"  - Layer 1 units: {info.get('n_lesioned_layer1', 'unknown')}")
+                print(f"  - Layer 2 units: {info.get('n_lesioned_layer2', 'unknown')}")
+                print(f"  - Total units: {info.get('n_all_lesioned', 'unknown')}")
             # Return cached results
             all_lesioned_units = cache_data['all_lesioned_units']
             return all_lesioned_units, cache_data['reg_weights'], cache_data['test_score']
         else:
             print(f"Cache contains old selection method ({selection_method}) - ignoring and recomputing")
-            print("Will use new separate X/Y regression-coefficient selection")
+            print("Will use predefined specific lesioned units")
     
     print("Identifying allocentric coding units (this may take a while)...")
     
@@ -181,54 +231,40 @@ def load_or_store_xy_units(net, train_set, validation_set, cache_path, force_rec
         net, train_set, validation_set, layer=[1, 2], mode='global', timestep=None
     )
     
-    # Select top 0.05% units for X and Y coordinates separately
-    x_units, y_units, combined_units, x_strengths, y_strengths = select_top_regression_units_separate_xy(
-        reg_weights, percentage=0.05, verbose=True)
+    # Use predefined specific lesioned units
+    lesioned_units_dict, all_lesioned_units, layer_assignments = lesion_specific_units(verbose=True)
     
-    # Create lesion map using separate X and Y units (matching RNN structure)
-    pseudo_pred_cells = np.array([x_units, y_units])  # Separate X and Y unit selections
-    lesion_map_list, _ = process_lesion_map_like_rnn(pseudo_pred_cells, verbose=True)
+    # Separate units by layer for consistency with analysis structure
+    lesioned_layer1 = np.array(lesioned_units_dict[1])  # Layer 1 units
+    lesioned_layer2 = np.array([unit + 2048 for unit in lesioned_units_dict[2]])  # Layer 2 units (global indices)
     
-    # Get ALL units that will be lesioned (both layers)
-    lesioned_layer1, lesioned_layer2, all_lesioned_units = get_rnn_lesioned_units_both_layers(lesion_map_list, verbose=True)
-    
-    print(f"Top 0.05% units selected separately:")
-    print(f"  - X-coordinate: {len(x_units)} units")
-    print(f"  - Y-coordinate: {len(y_units)} units")  
-    print(f"  - Combined unique: {len(combined_units)} units")
-    print(f"Units actually lesioned (both layers): {len(all_lesioned_units)}")
+    print(f"Predefined lesioned units:")
     print(f"  - Layer 1: {len(lesioned_layer1)} units")
-    print(f"  - Layer 2: {len(lesioned_layer2)} units")
+    print(f"  - Layer 2: {len(lesioned_units_dict[2])} units (original indices)")
+    print(f"  - Total unique units: {len(all_lesioned_units)} units")
     print(f"X-coordinate decoding R²: {test_score}")
     
     # Cache the results
-    print(f"Caching regression-selected units to {cache_path}")
+    print(f"Caching predefined lesioned units to {cache_path}")
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     cache_data = {
-        'x_regression_units': x_units,             # Top 0.05% X-coordinate units
-        'y_regression_units': y_units,             # Top 0.05% Y-coordinate units
-        'combined_regression_units': combined_units, # Combined unique units
-        'x_strengths': x_strengths,                # All X regression strengths
-        'y_strengths': y_strengths,                # All Y regression strengths
-        'lesioned_units_layer1': lesioned_layer1,   # Layer 1 lesioned units
-        'lesioned_units_layer2': lesioned_layer2,   # Layer 2 lesioned units  
-        'all_lesioned_units': all_lesioned_units,   # Combined lesioned units
+        'lesioned_units_dict': lesioned_units_dict,     # Original layer-specific units
+        'lesioned_units_layer1': lesioned_layer1,       # Layer 1 lesioned units
+        'lesioned_units_layer2': lesioned_layer2,       # Layer 2 lesioned units (global indices)  
+        'all_lesioned_units': all_lesioned_units,       # Combined lesioned units
+        'layer_assignments': layer_assignments,         # Unit to layer mapping
         'reg_weights': reg_weights,
         'test_score': test_score,
         'pred_cells': pred_cells,
-        'lesion_map_list': lesion_map_list,
-        'selection_method': 'regression_coefficient_separate_xy_0.05pct',
+        'selection_method': 'predefined_specific_units',
         'model_info': {
             'model_title': net.title if hasattr(net, 'title') else 'unknown',
-            'n_x_units': len(x_units),
-            'n_y_units': len(y_units),
-            'n_combined_units': len(combined_units),
-            'n_overlap_units': len(np.intersect1d(x_units, y_units)),
             'n_lesioned_layer1': len(lesioned_layer1),
-            'n_lesioned_layer2': len(lesioned_layer2),
+            'n_lesioned_layer2': len(lesioned_units_dict[2]),
             'n_all_lesioned': len(all_lesioned_units),
             'decoding_score': test_score,
-            'selection_percentage': 0.05
+            'layer1_units': lesioned_units_dict[1],
+            'layer2_units': lesioned_units_dict[2]
         }
     }
     with open(cache_path, 'wb') as f:
@@ -996,35 +1032,35 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         results: Dictionary containing analysis results
     """
     print("="*60)
-    print("ALLOCENTRIC ANALYSIS: TOP 0.05% X/Y REGRESSION UNITS (SEPARATE)")
+    print("ALLOCENTRIC ANALYSIS: PREDEFINED SPECIFIC LESIONED UNITS")
     print("="*60)
     
-    # 1. Load or identify top regression units (with caching)
-    print("\n1. Loading/identifying top 0.05% X and Y regression units separately...")
+    # 1. Load or identify predefined lesioned units (with caching)
+    print("\n1. Loading/identifying predefined specific lesioned units...")
     xy_units_cache_path = os.path.join(output_dir, "cached_xy_units.pkl")
     lesioned_units, reg_weights, test_score = load_or_store_xy_units(
         trained_net, train_set, validation_set, xy_units_cache_path, force_recompute
     )
     
-    # 2. Extract continuous tuning data for RNN-lesioned units only
-    print("\n2. Extracting 2D tuning profiles for RNN-lesioned units...")
+    # 2. Extract continuous tuning data for predefined lesioned units
+    print("\n2. Extracting 2D tuning profiles for predefined lesioned units...")
     unit_activations, xy_coords = analyze_continuous_xy_tuning(
         trained_net, validation_set, lesioned_units, output_dir=output_dir
     )
     
-    # 3. Spatial receptive fields visualization (RNN-lesioned units only)
+    # 3. Spatial receptive fields visualization (predefined lesioned units)
     print("\n3. Plotting spatial receptive fields...")
     fig_receptive = plot_spatial_receptive_fields(
         unit_activations, xy_coords, lesioned_units, n_units=len(lesioned_units), output_dir=output_dir
     )
     
-    # 4. Clustering analysis (RNN-lesioned units only)
+    # 4. Clustering analysis (predefined lesioned units)
     print("\n4. Clustering analysis...")
     cluster_labels, optimal_k, fig_clustering = simple_clustering_analysis(
         unit_activations, xy_coords, lesioned_units, output_dir=output_dir
     )
     
-    # 5. Visualize cluster representatives (RNN-lesioned units only)
+    # 5. Visualize cluster representatives (predefined lesioned units)
     print("\n5. Visualizing cluster representatives...")
     fig_clusters = visualize_clusters_by_tuning(
         unit_activations, xy_coords, lesioned_units, cluster_labels, output_dir=output_dir
@@ -1084,7 +1120,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     }
     
     print(f"\nAnalysis complete! Results saved to: {output_dir}")
-    print(f"- Analyzed {len(lesioned_units)} units from top 0.05% by regression strength")
+    print(f"- Analyzed {len(lesioned_units)} predefined specific lesioned units")
     print(f"- Identified {optimal_k} distinct clusters")
     print(f"- Decoding performance: R² = {test_score:.4f}")
     
@@ -1189,10 +1225,10 @@ def main():
         print("- cluster_representatives.png/svg: Representative tuning curves for each cluster")
         print("- lesion_error_polar_count.png/svg: Error count histograms for cluster lesions")
         print("- lesion_error_polar_scatter.png/svg: Error amplitude polar scatter plots")
-        print("- lesioned_units_analysis.csv: Top 0.05% regression units and cluster assignments")
+        print("- lesioned_units_analysis.csv: Predefined lesioned units and cluster assignments")
         print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
         print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
-        print("- cached_xy_units.pkl: Cached top 0.05% regression-coefficient units")
+        print("- cached_xy_units.pkl: Cached predefined lesioned units")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
     except Exception as e:
