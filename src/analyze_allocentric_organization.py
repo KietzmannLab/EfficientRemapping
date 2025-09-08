@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Analysis script for investigating allocentric coding units spatial organization.
-Analyzes 2D tuning profiles and clustering patterns of units that encode xy coordinates.
+Analysis script for clustering allocentric coding units and visualizing cluster representatives.
+Focuses on clustering analysis and visualization of representative units for each cluster.
 
 Usage:
     python analyze_allocentric_organization.py --model_path <path_to_model> --dataset_path <path_to_dataset>
@@ -192,329 +192,9 @@ def analyze_continuous_xy_tuning(net, dataset, allocentric_units, output_dir='./
     return unit_activations, xy_coords
 
 
-# Commented out - not needed for the essential analysis
-# def plot_spatial_receptive_fields(...)
-# This function was creating individual unit heatmaps but we focus on cluster analysis instead
 
 
-def perform_cluster_lesions(net, dataset, allocentric_units, unit_activations, xy_coords, cluster_labels, output_dir='./results', subset_ratio=0.2):
-    """
-    Perform targeted in-silico lesions of unit clusters using proper network lesion maps and analyze systematic errors.
-    
-    Args:
-        net: Trained RNN model
-        dataset: Dataset to test lesions on
-        allocentric_units: Unit indices of allocentric units
-        unit_activations: Original activations before lesioning
-        xy_coords: Ground truth coordinates
-        cluster_labels: Cluster assignment for each unit
-        output_dir: Directory to save results
-        subset_ratio: Fraction of data to use for lesion testing (default: 0.2 to save time)
-        
-    Returns:
-        lesion_results: Dictionary containing lesion analysis results
-    """
-    print("Performing targeted in-silico lesions with proper network lesion maps...")
-    
-    n_clusters = len(np.unique(cluster_labels))
-    lesion_results = {}
-    
-    # Sample subset of data for faster lesion testing
-    # Use the actual dataset length, not the cached activations length
-    n_samples = len(dataset)
-    subset_size = int(n_samples * subset_ratio)
-    subset_indices = np.random.choice(n_samples, size=subset_size, replace=False)
-    
-    print(f"Using subset of {subset_size}/{n_samples} samples ({subset_ratio*100:.1f}%) for lesion testing")
-    
-    # Get baseline performance on subset using actual network forward passes
-    print("Computing baseline performance...")
-    
-    # Ensure no lesion is active for baseline
-    clearLesionMap(net.model)
-    
-    # Get baseline activations through proper forward passes
-    subset_activations, subset_coords = get_lesioned_activations_simple(net, dataset, max_samples=subset_size)
-    
-    # Focus on allocentric units for decoding
-    baseline_allocentric_activations = subset_activations[:, allocentric_units]
-    
-    # Get baseline decoding performance
-    baseline_pred = decode_position_from_activations(baseline_allocentric_activations, subset_coords)
-    baseline_error = compute_position_errors(subset_coords, baseline_pred)
-    
-    print(f"Baseline decoding error: {np.mean(baseline_error):.4f}")
-    
-    # Test lesioning each cluster
-    cluster_errors = {}
-    
-    for cluster_id in range(n_clusters):
-        print(f"Testing lesion of cluster {cluster_id}...")
-        
-        # Create lesion map for this cluster
-        cluster_mask = cluster_labels == cluster_id
-        lesioned_unit_indices = allocentric_units[cluster_mask]
-        
-        # Apply lesion to network using our simple cluster lesion function
-        setClusterLesionMap(net.model, lesioned_unit_indices)
-        
-        # Get lesioned activations through proper forward passes
-        lesioned_activations, lesioned_coords = get_lesioned_activations_simple(net, dataset, max_samples=subset_size)
-        
-        # Focus on allocentric units for decoding (excluding lesioned ones for fairness)
-        remaining_allocentric_mask = ~cluster_mask
-        if np.sum(remaining_allocentric_mask) == 0:
-            print(f"  Warning: Cluster {cluster_id} contains all units, skipping...")
-            continue
-            
-        remaining_allocentric_units = allocentric_units[remaining_allocentric_mask]
-        lesioned_allocentric_activations = lesioned_activations[:, remaining_allocentric_units]
-        
-        # Decode positions with lesioned network
-        lesioned_pred = decode_position_from_activations(lesioned_allocentric_activations, lesioned_coords)
-        lesion_error = compute_position_errors(lesioned_coords, lesioned_pred)
-        
-        # Compute error vectors for systematic analysis
-        error_vectors = lesioned_pred - lesioned_coords
-        
-        # Analyze systematic errors
-        error_analysis = analyze_systematic_errors(error_vectors)
-        
-        cluster_errors[cluster_id] = {
-            'mean_error': np.mean(lesion_error),
-            'error_increase': np.mean(lesion_error) - np.mean(baseline_error),
-            'error_vectors': error_vectors,
-            'systematic_analysis': error_analysis,
-            'lesioned_units': np.sum(cluster_mask)
-        }
-        
-        print(f"  Cluster {cluster_id}: {cluster_errors[cluster_id]['lesioned_units']} units lesioned, "
-              f"error increase: {cluster_errors[cluster_id]['error_increase']:.4f}")
-    
-    # Clear lesion map when done
-    clearLesionMap(net.model)
-    
-    # Create polar plots of systematic errors
-    create_error_polar_plots(cluster_errors, output_dir)
-    
-    # Save lesion results
-    lesion_summary = []
-    for cluster_id, results in cluster_errors.items():
-        lesion_summary.append({
-            'cluster_id': cluster_id,
-            'lesioned_units': results['lesioned_units'],
-            'mean_error': results['mean_error'],
-            'error_increase': results['error_increase'],
-            'preferred_error_direction': results['systematic_analysis']['preferred_direction'],
-            'error_concentration': results['systematic_analysis']['concentration'],
-            'horizontal_bias': results['systematic_analysis']['horizontal_bias'],
-            'vertical_bias': results['systematic_analysis']['vertical_bias']
-        })
-    
-    lesion_df = pd.DataFrame(lesion_summary)
-    lesion_df.to_csv(os.path.join(output_dir, 'cluster_lesion_analysis.csv'), index=False)
-    
-    lesion_results = {
-        'baseline_error': baseline_error,
-        'cluster_errors': cluster_errors,
-        'lesion_summary': lesion_df,
-        'subset_size': subset_size,
-        'subset_ratio': subset_ratio
-    }
-    
-    return lesion_results
 
-
-def get_lesioned_activations_simple(net, dataset, max_samples=500):
-    """
-    Get activations from network with current lesion map applied, respecting scene structure.
-    
-    Args:
-        net: RNN model (with lesion map potentially applied) 
-        dataset: Dataset to extract from
-        max_samples: Maximum number of samples to process
-        
-    Returns:
-        activations: (n_samples, n_units) activations
-        coordinates: (n_samples, 2) x,y coordinates
-    """
-    # Use ClosedFormDecoding with full dataset
-    activations, fixations = ClosedFormDecoding.getFeatures(
-        net, dataset, layer_idx=[1, 2], timestep=None
-    )
-    
-    # The data structure is: scenes -> 7 fixations per scene -> 6 timesteps per fixation
-    # So each scene contributes 7 * 6 = 42 samples
-    # Truncate at scene boundaries to maintain data structure integrity
-    if len(activations) > max_samples:
-        samples_per_scene = 42  # 7 fixations * 6 timesteps
-        max_scenes = max_samples // samples_per_scene
-        max_samples_aligned = max_scenes * samples_per_scene
-        
-        if max_samples_aligned > 0:
-            activations = activations[:max_samples_aligned]
-            fixations = fixations[:max_samples_aligned]
-        else:
-            # If max_samples is very small, just take first scene
-            activations = activations[:samples_per_scene]
-            fixations = fixations[:samples_per_scene]
-    
-    coordinates = fixations[:, :2]  # x,y coordinates
-    return activations, coordinates
-
-
-def setClusterLesionMap(model, lesioned_unit_indices):
-    """
-    Set lesion map for specific unit indices using the proper RNN lesion format.
-    
-    Args:
-        model: The RNN model
-        lesioned_unit_indices: Array of unit indices to lesion
-    """
-    # Convert to the format expected by RNN lesioning code
-    # The RNN expects lesion_map to be a list of 4 arrays:
-    # [layer1_coord1, layer1_coord2, layer2_coord1, layer2_coord2]
-    
-    # Filter indices based on layer (assuming 2-layer model with 2048 units per layer)
-    layer1_indices = lesioned_unit_indices[lesioned_unit_indices < 2048]
-    layer2_indices = lesioned_unit_indices[lesioned_unit_indices >= 2048] - 2048
-    
-    model.lesion = True
-    model.lesion_map = [
-        layer1_indices,  # layer 1, coordinate 1
-        layer1_indices,  # layer 1, coordinate 2  
-        layer2_indices,  # layer 2, coordinate 1
-        layer2_indices   # layer 2, coordinate 2
-    ]
-
-
-def clearLesionMap(model):
-    """
-    Clear any active lesions from the model.
-    
-    Args:
-        model: The RNN model
-    """
-    model.lesion = False
-    model.lesion_map = None
-
-
-def decode_position_from_activations(activations, true_coords):
-    """
-    Simple linear decoder to predict positions from activations.
-    """
-    from sklearn.linear_model import Ridge
-    
-    # Split data for training decoder
-    n_samples = len(activations)
-    train_idx = np.random.choice(n_samples, size=n_samples//2, replace=False)
-    test_idx = np.setdiff1d(np.arange(n_samples), train_idx)
-    
-    # Train decoder
-    decoder = Ridge(alpha=1.0)
-    decoder.fit(activations[train_idx], true_coords[train_idx])
-    
-    # Predict on all data
-    pred_coords = decoder.predict(activations)
-    return pred_coords
-
-
-def compute_position_errors(true_coords, pred_coords):
-    """
-    Compute Euclidean distance errors between true and predicted coordinates.
-    """
-    return np.sqrt(np.sum((true_coords - pred_coords)**2, axis=1))
-
-
-def analyze_systematic_errors(error_vectors):
-    """
-    Analyze systematic biases in error vectors.
-    
-    Args:
-        error_vectors: (n_samples, 2) array of error vectors [dx, dy]
-        
-    Returns:
-        analysis: Dictionary containing systematic error analysis
-    """
-    dx, dy = error_vectors[:, 0], error_vectors[:, 1]
-    
-    # Convert to polar coordinates
-    error_magnitudes = np.sqrt(dx**2 + dy**2)
-    error_angles = np.arctan2(dy, dx)
-    
-    # Compute circular statistics for error direction
-    mean_direction = np.arctan2(np.mean(np.sin(error_angles)), np.mean(np.cos(error_angles)))
-    
-    # Concentration parameter (higher = more systematic)
-    concentration = np.sqrt(np.mean(np.cos(error_angles))**2 + np.mean(np.sin(error_angles))**2)
-    
-    # Bias analysis
-    horizontal_bias = np.mean(dx)  # Positive = rightward bias
-    vertical_bias = np.mean(dy)    # Positive = upward bias
-    
-    analysis = {
-        'preferred_direction': mean_direction,
-        'concentration': concentration,
-        'horizontal_bias': horizontal_bias,
-        'vertical_bias': vertical_bias,
-        'mean_error_magnitude': np.mean(error_magnitudes)
-    }
-    
-    return analysis
-
-
-def create_error_polar_plots(cluster_errors, output_dir):
-    """
-    Create polar plots showing systematic error directions for each cluster lesion.
-    """
-    n_clusters = len(cluster_errors)
-    n_cols = min(3, n_clusters)
-    n_rows = int(np.ceil(n_clusters / n_cols))
-    
-    fig = plt.figure(figsize=(5*n_cols, 5*n_rows))
-    
-    for i, (cluster_id, results) in enumerate(cluster_errors.items()):
-        ax = fig.add_subplot(n_rows, n_cols, i+1, projection='polar')
-        
-        error_vectors = results['error_vectors']
-        dx, dy = error_vectors[:, 0], error_vectors[:, 1]
-        
-        # Convert to polar coordinates
-        error_angles = np.arctan2(dy, dx)
-        error_magnitudes = np.sqrt(dx**2 + dy**2)
-        
-        # Create histogram of error directions
-        angle_bins = np.linspace(-np.pi, np.pi, 25)
-        hist, bin_edges = np.histogram(error_angles, bins=angle_bins)
-        
-        # Plot as polar histogram
-        theta = (bin_edges[:-1] + bin_edges[1:]) / 2
-        ax.bar(theta, hist, width=np.diff(bin_edges)[0], alpha=0.7)
-        
-        # # Add systematic bias vector
-        # sys_analysis = results['systematic_analysis']
-        # if sys_analysis['concentration'] > 0.1:  # Only show if concentrated
-        #     ax.arrow(sys_analysis['preferred_direction'], 0, 0, max(hist) * 0.8,
-        #             head_width=0.2, head_length=max(hist)*0.1, fc='red', ec='red', linewidth=2)
-        
-        ax.set_title(f'Cluster {cluster_id} Lesion\nError Direction Distribution\n'
-                    f'({results["lesioned_units"]} units)', pad=20)
-        ax.set_ylabel('Error Count', labelpad=30)
-    
-    plt.tight_layout()
-    
-    # Save figure
-    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.png'), 
-                dpi=300, bbox_inches='tight')
-    fig.savefig(os.path.join(output_dir, 'lesion_error_polar_plots.svg'), 
-                bbox_inches='tight')
-    
-    return fig
-
-
-# Commented out - not essential for the core analysis
-# def visualize_2d_tuning_curves(...)
-# This function was creating detailed tuning curves but we focus on cluster representatives instead
 
 
 def simple_clustering_analysis(unit_activations, xy_coords, allocentric_units, output_dir='./results'):
@@ -711,7 +391,7 @@ def visualize_clusters_by_tuning(unit_activations, xy_coords, allocentric_units,
 def analyze_allocentric_spatial_organization(trained_net, train_set, validation_set, 
                                            output_dir='./results', force_recompute=False, n_top_units=11):
     """
-    Streamlined analysis focusing on clustering and spatial receptive fields with lesion analysis.
+    Clustering analysis focusing on spatial receptive fields and cluster representatives.
     
     Args:
         trained_net: Trained RNN model
@@ -725,7 +405,7 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         results: Dictionary containing analysis results
     """
     print("="*60)
-    print("STREAMLINED ALLOCENTRIC ANALYSIS WITH LESION STUDIES")
+    print("ALLOCENTRIC CLUSTERING AND VISUALIZATION ANALYSIS")
     print("="*60)
     
     # 1. Load or identify allocentric units (with caching)
@@ -757,15 +437,12 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         unit_activations, xy_coords, allocentric_units, cluster_labels, output_dir=output_dir
     )
     
-    # 5. Perform targeted cluster lesions with proper lesion maps
-    print("\n5. Performing targeted cluster lesions...")
-    lesion_results = perform_cluster_lesions(
-        trained_net, validation_set, allocentric_units, unit_activations, 
-        xy_coords, cluster_labels, output_dir=output_dir, subset_ratio=1)
+    # 5. Analysis complete - removed lesion analysis
+    print("\n5. Analysis complete - clustering and visualization done")
     
     
-    # 7. Save comprehensive results
-    print("\n7. Saving results...")
+    # 6. Save comprehensive results
+    print("\n6. Saving results...")
     
     # Main results DataFrame
     results_df = pd.DataFrame({
@@ -775,26 +452,19 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     
     results_df.to_csv(os.path.join(output_dir, 'allocentric_units_analysis.csv'), index=False)
     
-    # Cluster summary with lesion effects
+    # Cluster summary (without lesion effects)
     cluster_summary = []
     for cluster_id in range(optimal_k):
         cluster_mask = cluster_labels == cluster_id
         cluster_size = np.sum(cluster_mask)
         
-        lesion_data = lesion_results['cluster_errors'][cluster_id]
-        
         cluster_summary.append({
             'cluster_id': cluster_id,
-            'size': cluster_size,
-            'lesion_error_increase': lesion_data['error_increase'],
-            'preferred_error_direction': lesion_data['systematic_analysis']['preferred_direction'],
-            'error_concentration': lesion_data['systematic_analysis']['concentration'],
-            'horizontal_bias': lesion_data['systematic_analysis']['horizontal_bias'],
-            'vertical_bias': lesion_data['systematic_analysis']['vertical_bias']
+            'size': cluster_size
         })
     
     cluster_summary_df = pd.DataFrame(cluster_summary)
-    cluster_summary_df.to_csv(os.path.join(output_dir, 'cluster_lesion_summary.csv'), index=False)
+    cluster_summary_df.to_csv(os.path.join(output_dir, 'cluster_summary.csv'), index=False)
     
     # Compile all results
     results = {
@@ -805,7 +475,6 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
         'n_clusters': optimal_k,
         'decoding_score': test_score,
         'regression_weights': reg_weights,
-        'lesion_results': lesion_results,
         'results_df': results_df,
         'cluster_summary': cluster_summary_df
     }
@@ -815,12 +484,10 @@ def analyze_allocentric_spatial_organization(trained_net, train_set, validation_
     print(f"- Identified {optimal_k} distinct clusters")
     print(f"- Decoding performance: R² = {test_score:.4f}")
     
-    # Print cluster summary with lesion effects
-    print("\nCluster Lesion Summary:")
+    # Print cluster summary
+    print("\nCluster Summary:")
     for _, row in cluster_summary_df.iterrows():
-        print(f"  Cluster {row['cluster_id']}: {row['size']} units, "
-              f"lesion error increase: {row['lesion_error_increase']:.4f}, "
-              f"systematic bias: ({row['horizontal_bias']:.3f}, {row['vertical_bias']:.3f})")
+        print(f"  Cluster {row['cluster_id']}: {row['size']} units")
     
     return results
 
@@ -864,7 +531,6 @@ def main():
     # Load trained model
     print(f"Loading energy-efficient model from {args.model_path}")
     print(args.model_path)
-    model_title = args.model_path.rstrip("_").split("/")[-1]
     
     # Initialize and load model (parameters matching your energy-efficient model)
     net = RNN.State(
@@ -903,7 +569,7 @@ def main():
     
     # Run complete analysis
     try:
-        results = analyze_allocentric_spatial_organization(
+        analyze_allocentric_spatial_organization(
             net, train_set, validation_set, output_dir=args.output_dir, 
             force_recompute=args.force_recompute, n_top_units=args.n_top_units
         )
@@ -913,12 +579,10 @@ def main():
         print("="*60)
         print(f"Results saved to: {args.output_dir}")
         print("\nGenerated files:")
-        print("- simple_clustering.png/svg: PCA and correlation-based clustering analysis")
-        print("- cluster_representatives.png/svg: 2D heatmaps of representative units for each cluster")
-        print("- lesion_error_polar_plots.png/svg: Systematic error analysis from proper cluster lesions")
+        print("- activation_clustering.png/svg: PCA and clustering analysis")
+        print("- cluster_representatives.pdf/svg: 2D heatmaps of representative units for each cluster")
         print("- allocentric_units_analysis.csv: Unit indices and cluster assignments")
-        print("- cluster_lesion_summary.csv: Summary of lesion effects per cluster")
-        print("- cluster_lesion_analysis.csv: Detailed lesion analysis results")
+        print("- cluster_summary.csv: Basic cluster information")
         print("- cached_xy_units.pkl: Cached allocentric unit identifications")
         print("- activations_cache_*.pkl: Cached activations for future use")
         
