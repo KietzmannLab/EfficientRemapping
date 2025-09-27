@@ -63,6 +63,8 @@ Z_CRIT = 2.576 #99%
 SEQ_LENGTH = 10
 TIME_STEPS_IMG = 6
 TIME_STEPS_CORDS = 3
+SUPERVISED = False
+NUM_LAYERS = 2
 # dataset loaders
 import mnist
 from H5dataset import H5dataset
@@ -79,9 +81,9 @@ if MNIST:
     validation_set = test_set
 else:
     h5_dataset = '/share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5'
-    validation_set = H5dataset('val', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
-    test_set = H5dataset('test', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
-    train_set = H5dataset('train', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
+    validation_set = H5dataset('val', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels=False)
+    test_set = H5dataset('test', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels=False)
+    train_set = H5dataset('train', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels=False)
 
 # load pre, post MNIST networks
 nets = [[], [], [], [], []]
@@ -126,7 +128,11 @@ for loss_ind, loss in enumerate(losses):
                 time_steps_cords=TIME_STEPS_CORDS,
                 mnist=MNIST,
                 twolayer=(loss_ind!=0),
-                dropout=0)
+                dropout=0,
+                disentangled_loss=False,
+                useReservoir=False,
+                num_layers=NUM_LAYERS,
+                supervised=SUPERVISED)
         net.load(i, twolayers=loss_ind!=0)
         nets[loss_ind].append(net)
 

@@ -14,7 +14,7 @@ class RNN(torch.nn.Module):
     """
 
     def __init__(self, input_size: int, hidden_size: int, activation_func,
-                 prevbatch=False, device=None, use_fixation=True, use_lateral=True, use_conv=False, use_lstm=False, use_resNet=False, time_steps_img=1, time_steps_cords=1, twolayers=True, dropout_rate=0, disentangled_loss=False, useReservoir=False):
+                 prevbatch=False, device=None, use_fixation=True, use_lateral=True, use_conv=False, use_lstm=False, use_resNet=False, time_steps_img=1, time_steps_cords=1, twolayers=True, dropout_rate=0, disentangled_loss=False, useReservoir=False, num_layers=2, supervised=False):
         super(RNN, self).__init__()
 
         self.input_size = input_size
@@ -36,6 +36,8 @@ class RNN(torch.nn.Module):
         self.dropout_rate = dropout_rate
         self.disentangled_loss = disentangled_loss
         self.useReservoir = useReservoir
+        self.num_layers = num_layers
+        self.supervised = supervised
         if self.use_grid_coding:
             self.number_frequencies = 6
             self.number_cells_frequency = 50
@@ -78,9 +80,16 @@ class RNN(torch.nn.Module):
                     # if twolayers:
                     self.layer1 = RNN_block(input_size + 2, input_size + 2, output_size=input_size + 2, l_connection=False, t_connection=False, identity_b=True, use_activation_func=False, activation_func=activation_func, disentangled_loss=self.disentangled_loss)
                     self.layer2 = RNN_block(input_size + 2, hidden_size, output_size=input_size, l_connection=True, activation_func=activation_func, excitatory_b=False, disentangled_loss=self.disentangled_loss)
-                    self.layer3 = RNN_block(hidden_size, hidden_size, l_connection=True, activation_func=activation_func, excitatory_b=False, disentangled_loss=self.disentangled_loss)
-                    # self.layer4 = RNN_block(hidden_size, hidden_size, l_connection=True, activation_func=activation_func, excitatory_b=False)
-                    self.layers = [self.layer1, self.layer2, self.layer3]
+                    self.layers = [self.layer1, self.layer2]
+                    if num_layers > 1:
+                        self.layer3 = RNN_block(hidden_size, hidden_size, l_connection=True, activation_func=activation_func, excitatory_b=False, disentangled_loss=self.disentangled_loss)
+                        self.layers = [self.layer1, self.layer2, self.layer3]
+                    if num_layers > 2:
+                        self.layer4 = RNN_block(hidden_size, hidden_size, l_connection=True, activation_func=activation_func, excitatory_b=False, disentangled_loss=self.disentangled_loss)
+                        self.layers = [self.layer1, self.layer2, self.layer3, self.layer4]
+                    if supervised:
+                        self.layer4 = RNN_block(hidden_size, 91, l_connection=False, t_connection=False, activation_func=torch.nn.Sigmoid(), excitatory_b=False, disentangled_loss=self.disentangled_loss)
+                        self.layers = [self.layer1, self.layer2, self.layer3, self.layer4]
                     # else:
                     #     self.layer1 = RNN_block(input_size + 2, input_size + 2, output_size=input_size + 2, l_connection=True, t_connection=False, identity_b=True, use_activation_func=False, activation_func=activation_func)
                     #     self.layers = [self.layer1]
@@ -271,8 +280,8 @@ class ResNetRNN(RNN):
     """
 
     def __init__(self, input_size: int, hidden_size: int, activation_func,
-                 prevbatch=False, device=None, use_fixation=True, use_lateral=True, use_conv=False, use_lstm=False, use_resNet=False, time_steps_img=1, time_steps_cords=1, twolayer=True, dropout=0, disentangled_loss=False, useReservoir=False):
-        super(ResNetRNN, self).__init__(input_size, hidden_size, activation_func, prevbatch, device, use_fixation, use_lateral, use_conv, use_lstm, use_resNet, time_steps_img, time_steps_cords, twolayer, dropout, disentangled_loss, useReservoir)
+                 prevbatch=False, device=None, use_fixation=True, use_lateral=True, use_conv=False, use_lstm=False, use_resNet=False, time_steps_img=1, time_steps_cords=1, twolayer=True, dropout=0, disentangled_loss=False, useReservoir=False, num_layers=2, supervised=False):
+        super(ResNetRNN, self).__init__(input_size, hidden_size, activation_func, prevbatch, device, use_fixation, use_lateral, use_conv, use_lstm, use_resNet, time_steps_img, time_steps_cords, twolayer, dropout, disentangled_loss, useReservoir, num_layers, supervised)
         self.twolayer=twolayer
         if self.use_resNet:
             self.resNet = ResNet()
@@ -595,7 +604,9 @@ class State(ModelState):
                  twolayer=True,
                  dropout=0,
                  disentangled_loss=False,
-                 useReservoir=False):
+                 useReservoir=False,
+                 num_layers=2,
+                 supervised=False):
         self.mnist = mnist
         if seed != None:
             torch.manual_seed(seed)
@@ -612,7 +623,7 @@ class State(ModelState):
 
         ModelState.__init__(self,
 
-                            ResNetRNN(input_size, hidden_size, activation_func, device=device, use_fixation=use_fixation, use_conv=use_conv, use_lstm=use_lstm, use_resNet=use_resNet, time_steps_img=time_steps_img, time_steps_cords=time_steps_cords, twolayer=twolayer, dropout=dropout, disentangled_loss=disentangled_loss, useReservoir=useReservoir).to(device),
+                            ResNetRNN(input_size, hidden_size, activation_func, device=device, use_fixation=use_fixation, use_conv=use_conv, use_lstm=use_lstm, use_resNet=use_resNet, time_steps_img=time_steps_img, time_steps_cords=time_steps_cords, twolayer=twolayer, dropout=dropout, disentangled_loss=disentangled_loss, useReservoir=useReservoir, num_layers=num_layers, supervised=supervised).to(device),
                             optimizer,
                             lr,
 
@@ -625,6 +636,8 @@ class State(ModelState):
                                 "Wl2": np.zeros(0)
                             },
                             device)
+        if self.model.supervised:
+            self.supervised_loss_fn = torch.nn.BCELoss()        
 
     def run(self, batch, fixations, loss_fn, state=None):
         """
@@ -636,6 +649,8 @@ class State(ModelState):
         """
         batch = batch.to(self.device)
         fixations = fixations.to(self.device)
+        if self.model.supervised:
+            state = state.to(self.device)
         if len(batch.shape) == 2:
             batch_size = batch.shape[1]
             batch = batch.permute(1,0).reshape(batch_size, 1, 140, 56)
@@ -673,7 +688,8 @@ class State(ModelState):
             for t in range(self.model.time_steps_img):
                 if t >= self.model.time_steps_img - self.model.time_steps_cords:
                     h, l_a, recurrent_state = self.model(image, fixation=fixations[:, i], state=h, recurrent_state=recurrent_state)  # l_a is now a list of potential loss terms
-                    loss = loss + self.loss(l_a, loss_fn)
+                    if not self.model.supervised:
+                        loss = loss + self.loss(l_a, loss_fn)
                     # if i == 6 and t == 5:
                     #     print(f"{t}, {self.loss(l_a, loss_fn)}")
                 else:
@@ -682,6 +698,11 @@ class State(ModelState):
                     loss = loss + self.loss(l_a, loss_fn)
                     # if i == 6 and t == 0:
                     #     print(f"{t}, {self.loss(l_a, loss_fn)}")
+                if self.model.supervised:
+                    # assert not torch.any(torch.isnan(recurrent_state[0][3]))
+                    torch.nan_to_num(recurrent_state[0][3], 0.5)
+                    # print(state.shape)
+                    loss = loss + self.supervised_loss_fn(recurrent_state[0][3], state)        
         return loss, loss.detach(), None
 
     def loss(self, loss_terms, loss):

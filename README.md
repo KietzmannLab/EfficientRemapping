@@ -11,11 +11,13 @@ Or look in requirements.txt - be sure to use Python >=3.7
 
 ### Training
 
-- The model can be trained by calling "src/train_models.py"
+- The model can be trained by calling "src/train_models.py". Changing the parameters enables training variations in architecture and loss.
 
 - Make sure to adjust the dataset path in "src/train_models.py"
 
 - The path for the saved model can be adjusted in the function "save" in "src/ModelState.py"
+
+- Calling the script "src/train_temporal_stability.py" trains the model trained for temporal stability
 
 ### Evaluation
 
@@ -26,6 +28,14 @@ Or look in requirements.txt - be sure to use Python >=3.7
 - Calling the script "src/plotResults.py" creates the plots for Figure 2B/C and Figure 3D. It additionally performs and prints the necessary t-tests for Figures 2B and 3D. Make sure to adjust the path for the svg file at the top of the script of necessary.
 
 - Calling the script "src/plotWeights.py" creates Figure 3C. Make sure to adjust the path for the svg file at the top of the script of necessary.
+
+- Calling the script "src/RevisionsTest.py" extracts and prints performances of different model architectures and the supervised loss used for Figure S1
+
+- Calling the script "src/test_temporal_stability.py" extracts and prints performances of the model trained for temporal stability for Figure S1
+
+- The Figures S1 can be plotted by calling the script "src/plot_supplementary_results.py"
+
+- The Figures S2 can be plotted by calling the script "src/analyze_allocentric_prganization.py". All needed analyses are contained within the script
 
 - All created plots and svg files are stored in "src/Results/Fig2_mscoco/".
 

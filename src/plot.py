@@ -985,7 +985,7 @@ def compare_previous_fixation(net:ModelState, dataset:Dataset, latent=False, see
     losses = None
     torch.manual_seed(seed)
     batch_nr = -1
-    feedback_grouped = torch.zeros((2051, 2, 7, 6, 128*128))
+    feedback_grouped = torch.zeros((2051, 2, 7, net.model.time_steps_img, 128*128))
     for batch, fixations in loader:
         batch_nr += 1
         recurrent_state_pred = None

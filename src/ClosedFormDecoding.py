@@ -43,7 +43,7 @@ def getFeatures(net:ModelState, dataset:Dataset, layer_idx, timestep=None, shuff
              break
     all_activations_layer = all_activations_layer.flatten(start_dim=0, end_dim=1).cpu().numpy()
     if timestep is None:
-        all_fixations = torch.repeat_interleave(all_fixations.flatten(start_dim=0, end_dim=1), 6, 0).cpu().numpy()
+        all_fixations = torch.repeat_interleave(all_fixations.flatten(start_dim=0, end_dim=1), net.model.time_steps_img, 0).cpu().numpy()
     else:
         all_fixations = all_fixations.flatten(start_dim=0, end_dim=1).cpu().numpy()
     # print(f"return getFeatures: {all_activations_layer.shape, all_fixations.shape}")

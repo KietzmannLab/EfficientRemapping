@@ -73,10 +73,23 @@ class ModelState:
                         filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_smallCrops_1500.pth"
                     elif not self.model.use_fixation:
                         filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_noCords_1500.pth"
+                    elif self.model.supervised:
+                        # filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_Supervised_1500.pth"
+                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_Supervised_100.pth"
+                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_Supervised2_50.pth"
+                        # filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_Supervised2_1500.pth"
+                    elif len(self.model.layers) == 2:
+                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_1layer_4096_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_1500.pth"
+                    elif len(self.model.layers) == 4:
+                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_3layer_1024_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_1500.pth"
+                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_3layer_1024_timesteps_6_3_lr1e4_ReLU_nonCords_new_Supervised_1500.pth"
                     else:
                         # filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr5e4_ReLU_nonCords_1500.pth"
                         # filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_lessDecay_1500.pth"
-                        filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + "_fc_lateral_2layer_2048_timesteps_6_3_lr1e4_ReLU_nonCords_new_moreRL_1500.pth"
+                        if self.model.time_steps_img == 4:
+                            filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + f"_fc_lateral_2layer_2048_timesteps_{self.model.time_steps_img}_{self.model.time_steps_cords}_lr1e4_ReLU_nonCords_new_moreRL_1500.pth"
+                        else:
+                            filepath = "./EmergentPredictiveCoding/models/" + self.title +"_" + str(idx) + f"_fc_lateral_2layer_2048_timesteps_{self.model.time_steps_img}_{self.model.time_steps_cords}_lr1e4_ReLU_nonCords_new_moreRL_1500.pth"
                         # filepath = "./models/" + self.title +"_" + str(idx) + "lateral.pth"
             if path is not None:
                 filepath = path

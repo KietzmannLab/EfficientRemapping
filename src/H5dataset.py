@@ -43,10 +43,13 @@ class H5dataset(torch.utils.data.Dataset):
         classes_from_embeddings = False,
         image_dtype = np.uint8,
         device='cpu',
-        use_color=False
+        use_color=False,
+        multihot_dict = 'img_multi_hot',
+        class_labels = False
     ):
         super().__init__()
         self.split = split
+        self.class_labels = class_labels
         self._dataset_path = dataset_path
         self.image_dtype = image_dtype
         self.classes_from_embeddings = classes_from_embeddings
@@ -58,6 +61,7 @@ class H5dataset(torch.utils.data.Dataset):
         self.data = self.image_label[image_dict]
 
         self.targets = self.image_label[fixation_dict]
+        self.labels = self.image_label[multihot_dict]
         self.device = device
         self.use_color = use_color
 
@@ -68,7 +72,11 @@ class H5dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         image = self.data[idx]
         fixation = self.targets[idx]
-        return image, fixation
+        if not self.class_labels:
+            return image, fixation
+        else:
+            label = self.labels[idx]
+            return image, fixation, label
         
 
     def collate_fn(self, x):

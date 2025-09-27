@@ -32,7 +32,11 @@ def test_epoch(ms: ModelState,
     else:
         loader = dataset.create_batches(batch_size=batch_size, shuffle=True)
         num_batches = len(dataset) // batch_size + 1
-        for batch, fixation in loader:
+        for data in loader:
+            if not ms.model.supervised:
+                batch, fixation = data
+            else:
+                batch, fixation, state = data
             with torch.no_grad():
                 loss, res, state = test_batch(ms, batch, fixation, loss_fn, state)
         
@@ -105,7 +109,11 @@ def train_epoch(ms: ModelState,
 
         num_batches = len(dataset) // batch_size
 
-        for batch, fixation in loader:
+        for data in loader:
+            if not ms.model.supervised:
+                batch, fixation = data
+            else:
+                batch, fixation, state = data
 
 
             loss, res, state = train_batch(ms, batch, fixation, loss_fn, state, scaler=scaler)

@@ -40,7 +40,16 @@ TIME_STEPS_CORDS = 3
 DISENTANGLED_LOSS = False
 LEARNING_RATE = 7e-4
 DROPOUT = 0
-USE_RESERVOIR = True
+USE_RESERVOIR = False
+NUM_LAYERS = 2
+SUPERVISED = True
+if SUPERVISED:
+    LEARNING_RATE = 7e-5
+
+if NUM_LAYERS == 1:
+    HIDDEN_SIZE = 4096
+if NUM_LAYERS == 3:
+    HIDDEN_SIZE = 1024
 
 
 # dataset loaders
@@ -48,9 +57,9 @@ if MNIST:
     train_set, validation_set, test_set = mnist.load(val_ratio=0.0)
 else:
     h5_dataset = '/share/klab/datasets/optimized_datasets/ms_coco_embeddings_deepgaze.h5'
-    validation_set = H5dataset('test', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
-    test_set = H5dataset('val', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
-    train_set = H5dataset('train', h5_dataset, device=DEVICE, use_color=USE_RES_NET)
+    validation_set = H5dataset('test', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels = SUPERVISED)
+    test_set = H5dataset('val', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels = SUPERVISED)
+    train_set = H5dataset('train', h5_dataset, device=DEVICE, use_color=USE_RES_NET, class_labels = SUPERVISED)
 
 
 """
@@ -101,7 +110,10 @@ for loss_ind, loss in enumerate(losses):
                 # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_moreRL_",
                 # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_moreRL_noCords_",
                 # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_moreRL_smallCrops_",
-                title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_moreRL_",
+                
+                # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_{NUM_LAYERS}layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_moreRL_",
+                title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_{NUM_LAYERS}layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_ReLU_nonCords_new_Supervised2_",
+
                 # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr5e4_ReLU_moreDecay_",
                 # title=f"patterns_rev/mscoco_deepgaze3/mscoco_net{loss}_{i}_fc_lateral_2layer_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_lr1e4_50_6_grid_cells_",
                 # title=f"patterns_rev/seeded_mnist/mnist_net{loss}_{i}_fc_1layer_shuffled_positions_{HIDDEN_SIZE}_timesteps_{TIME_STEPS_IMG}_{TIME_STEPS_CORDS}_ordered_1init_largerLR_",
@@ -117,7 +129,9 @@ for loss_ind, loss in enumerate(losses):
                 mnist=MNIST,
                 dropout=DROPOUT,
                 disentangled_loss=DISENTANGLED_LOSS,
-                useReservoir=USE_RESERVOIR)
+                useReservoir=USE_RESERVOIR,
+                num_layers=NUM_LAYERS,
+                supervised=SUPERVISED)
         
         start_epoch = 0
         for epochs in range(0, NUM_EPOCHS, 50):
